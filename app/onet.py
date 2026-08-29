@@ -1,133 +1,283 @@
 from __future__ import annotations
 
-import json
+import csv
 import re
-from dataclasses import asdict, dataclass
+import sqlite3
 from pathlib import Path
+from typing import Any
 
-TRIPLE = re.compile(r'^<([^>]+)> <([^>]+)> (.+) \.$')
-LITERAL = re.compile(r'^"((?:[^"\\]|\\.)*)"(?:\^\^<[^>]+>|@[a-z-]+)?$')
+from pyoxigraph import Store
+
 SCHEMA = "https://www.onetcenter.org/rdf/schema/onet/"
+ROOT = Path(__file__).resolve().parent.parent
+BRIGHT_OUTLOOK = ROOT / "data" / "db_31_0_nt" / "BrightOutlook.csv"
+PREFIXES = f"PREFIX onet: <{SCHEMA}>\nPREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>"
 STOP_WORDS = {
-    "about", "and", "are", "career", "consider", "could", "education", "enjoy",
-    "find", "help", "into", "like", "matching", "path", "paths", "should", "that",
-    "the", "what", "with", "would",
+    "about", "already", "and", "are", "area", "available", "career", "certificate",
+    "become", "consider", "could", "degree", "education", "enjoy", "find", "fits", "have", "help", "idea",
+    "interested", "into", "jose", "like", "live", "matching", "near", "nearby", "path",
+    "paths", "running", "san", "should", "that", "the", "want", "what", "where", "with",
+    "would",
 }
-SEARCH_ALIASES = {
-    "coding": {"code", "computer", "developer", "program", "programmer", "software"},
-    "programming": {"code", "computer", "developer", "program", "programmer", "software"},
-}
-
-
-def _search_terms(query: str) -> set[str]:
+def _search_terms(query: str) -> list[str]:
     terms = {
         term for term in re.findall(r"[a-z0-9]+", query.lower())
-        if len(term) > 2 and term not in STOP_WORDS
+        if len(term) > 2 and term not in STOP_WORDS and not term.isdigit()
     }
-    variants = set(terms)
-    for term in terms:
-        variants.update(SEARCH_ALIASES.get(term, set()))
-        if term.endswith("ing") and len(term) > 5:
-            variants.add(term[:-3])
-        if term.endswith("s") and len(term) > 4:
-            variants.add(term[:-1])
-    return variants
+    terms.update(term[:-5] for term in tuple(terms) if term.endswith("shops") and len(term) > 7)
+    return sorted(terms)
 
 
-@dataclass
-class Occupation:
-    uri: str
-    code: str = ""
-    title: str = ""
-    description: str = ""
-    education: list[dict] | None = None
+def _text(term: Any) -> str:
+    return term.value if term is not None else ""
 
 
-def _value(raw: str) -> str:
-    if raw.startswith("<"):
-        return raw[1:-1]
-    match = LITERAL.match(raw)
-    return json.loads(f'"{match.group(1)}"') if match else raw
-
-
-def _triples(path: Path):
-    with path.open(encoding="utf-8") as source:
-        for line in source:
-            match = TRIPLE.match(line.rstrip())
-            if match:
-                yield match.group(1), match.group(2), _value(match.group(3))
-
-
-class OnetIndex:
-    def __init__(self, data_dir: Path, cache_path: Path):
-        self.data_dir = data_dir
-        self.cache_path = cache_path
-        self.occupations: list[dict] = []
+class OnetGraph:
+    def __init__(self, store_path: Path):
+        self.store_path = store_path
+        self.store: Store | None = None
+        self.search_db: sqlite3.Connection | None = None
+        self.occupation_count = 0
 
     def load(self) -> None:
-        sources = [self.data_dir / name for name in (
-            "Occupation.nt", "EducationCategory.nt", "EducationRating.nt"
-        )]
-        if not all(path.exists() for path in sources):
-            raise RuntimeError("O*NET data is missing. Run scripts/init-onet-data.sh.")
-        newest_source = max(path.stat().st_mtime for path in sources)
-        if self.cache_path.exists() and self.cache_path.stat().st_mtime >= newest_source:
-            self.occupations = json.loads(self.cache_path.read_text())
-            return
-        self.occupations = self._build()
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self.cache_path.write_text(json.dumps(self.occupations, separators=(",", ":")))
+        if not (self.store_path / "READY").exists():
+            raise RuntimeError("O*NET graph store is missing. Run scripts/init-onet-store.py.")
+        self.store = Store(str(self.store_path / "oxigraph"))
+        search_path = self.store_path / "search.sqlite"
+        if not search_path.exists():
+            self._build_search_index(search_path)
+        self.search_db = sqlite3.connect(search_path, check_same_thread=False)
+        row = next(iter(self._query(
+            "SELECT (COUNT(?occupation) AS ?count) WHERE "
+            "{ ?occupation rdf:type onet:Occupation . }"
+        )))
+        self.occupation_count = int(_text(row["count"]))
 
-    def _build(self) -> list[dict]:
-        category_data: dict[str, dict] = {}
-        for subject, predicate, value in _triples(self.data_dir / "EducationCategory.nt"):
-            item = category_data.setdefault(subject, {})
-            if predicate.startswith(SCHEMA):
-                item[predicate.removeprefix(SCHEMA)] = value
-
-        rating_data: dict[str, dict] = {}
-        for subject, predicate, value in _triples(self.data_dir / "EducationRating.nt"):
-            if predicate.startswith(SCHEMA):
-                rating_data.setdefault(subject, {})[predicate.removeprefix(SCHEMA)] = value
-
-        occupations: dict[str, Occupation] = {}
-        rating_owners: dict[str, str] = {}
-        fields = {"onetSOCCode": "code", "title": "title", "description": "description"}
-        for subject, predicate, value in _triples(self.data_dir / "Occupation.nt"):
-            name = predicate.removeprefix(SCHEMA)
-            if name in fields:
-                setattr(occupations.setdefault(subject, Occupation(subject)), fields[name], value)
-            elif name == "hasRating":
-                rating_owners[value] = subject
-
-        for rating_uri, rating in rating_data.items():
-            owner = rating_owners.get(rating_uri)
-            category = category_data.get(rating.get("refersTo", ""))
-            if owner and category and "dataValue" in rating:
-                occupation = occupations.setdefault(owner, Occupation(owner))
-                occupation.education = occupation.education or []
-                occupation.education.append({
-                    "level": category.get("categoryDescription", "Unknown"),
-                    "share": float(rating["dataValue"]),
-                })
-
-        result = []
-        for occupation in occupations.values():
-            if occupation.title and occupation.education:
-                occupation.education.sort(key=lambda item: item["share"], reverse=True)
-                result.append(asdict(occupation))
-        return result
+    def _query(self, sparql: str):
+        if self.store is None:
+            raise RuntimeError("O*NET graph store has not been loaded.")
+        return self.store.query(f"{PREFIXES}\n{sparql}")
 
     def search(self, query: str, limit: int = 5) -> list[dict]:
+        if self.search_db is None:
+            raise RuntimeError("O*NET search index has not been loaded.")
         terms = _search_terms(query)
-        ranked = []
-        for occupation in self.occupations:
-            title = occupation["title"].lower()
-            description = occupation["description"].lower()
-            score = sum(5 for term in terms if term in title) + sum(
-                1 for term in terms if term in description
+        if not terms:
+            return []
+        term_query = " OR ".join(f'"{term}"*' for term in terms)
+        all_terms_query = " AND ".join(f'"{term}"*' for term in terms)
+        sql = """SELECT occupation_uri, code, title, description,
+                        bm25(occupation_search, 0, 0, 12, 9, 3, 5, 2, 2) AS rank
+                 FROM occupation_search WHERE occupation_search MATCH ?
+                 ORDER BY rank LIMIT ?"""
+        rows = list(self.search_db.execute(
+            sql, (f"{{title alternate_titles}} : ({all_terms_query})", limit)
+        ))
+        if len(rows) < limit:
+            seen = {row[1] for row in rows}
+            rows.extend(
+                row for row in self.search_db.execute(
+                    sql, (f"{{title alternate_titles}} : ({term_query})", limit * 2)
+                )
+                if row[1] not in seen
             )
-            if score:
-                ranked.append((score, occupation["title"], occupation))
-        ranked.sort(key=lambda item: (-item[0], item[1]))
-        return [item[2] for item in ranked[:limit]]
+            rows = rows[:limit]
+        if len(rows) < limit:
+            seen = {row[1] for row in rows}
+            rows.extend(
+                row for row in self.search_db.execute(sql, (term_query, limit * 2))
+                if row[1] not in seen
+            )
+            rows = rows[:limit]
+        results = []
+        for row in rows:
+            bright = self.search_db.execute(
+                "SELECT categories FROM bright_outlook WHERE code = ?", (row[1],)
+            ).fetchone()
+            results.append({
+                "uri": row[0], "code": row[1], "title": row[2], "description": row[3],
+                "bright_outlook": bright[0].split("; ") if bright else [],
+            })
+        return results
+
+    def results(self, query: str, limit: int = 5) -> list[dict]:
+        terms = _search_terms(query)
+        return [self._features(item, terms) for item in self.search(query, limit)]
+
+    def result_by_code(self, code: str) -> dict | None:
+        if self.search_db is None:
+            raise RuntimeError("O*NET search index has not been loaded.")
+        row = self.search_db.execute(
+            "SELECT occupation_uri, code, title, description FROM occupation_search WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if row is None:
+            return None
+        bright = self.search_db.execute(
+            "SELECT categories FROM bright_outlook WHERE code = ?", (code,)
+        ).fetchone()
+        occupation = {
+            "uri": row[0], "code": row[1], "title": row[2], "description": row[3],
+            "bright_outlook": bright[0].split("; ") if bright else [],
+        }
+        return self._features(occupation, [])
+
+    def related_results(self, occupation: dict, limit: int = 8) -> list[dict]:
+        rows = self._query(f"""
+            SELECT ?code WHERE {{
+              <{occupation['uri']}> onet:hasRelatedOccupation ?link .
+              ?link onet:refersTo ?related ; onet:relatedIndex ?index .
+              ?related onet:onetSOCCode ?code .
+            }} ORDER BY ?index LIMIT {limit}
+        """)
+        return [result for row in rows if (result := self.result_by_code(_text(row["code"])))]
+
+    def _build_search_index(self, path: Path) -> None:
+        documents: dict[str, dict[str, Any]] = {}
+        for row in self._query("""
+            SELECT ?occupation ?code ?title ?description WHERE {
+              ?occupation rdf:type onet:Occupation ; onet:onetSOCCode ?code ;
+                onet:title ?title ; onet:description ?description .
+            }
+        """):
+            uri = _text(row["occupation"])
+            documents[uri] = {
+                "uri": uri, "code": _text(row["code"]), "title": _text(row["title"]),
+                "description": _text(row["description"]), "alternate_titles": [],
+                "tasks": [], "features": [], "software": [],
+            }
+
+        text_queries = {
+            "alternate_titles": """
+                SELECT ?occupation ?text WHERE {
+                  { ?occupation onet:hasJobTitle ?resource . ?resource onet:jobTitle ?text . }
+                  UNION
+                  { ?occupation onet:hasReportedTitle ?resource .
+                    ?resource onet:reportedJobTitle ?text . }
+                }
+            """,
+            "tasks": """
+                SELECT ?occupation ?text WHERE {
+                  ?occupation onet:hasTask ?resource . ?resource onet:task ?text .
+                }
+            """,
+            "features": """
+                SELECT DISTINCT ?occupation ?text WHERE {
+                  ?occupation onet:hasRating ?rating . ?rating onet:refersTo ?resource .
+                  ?resource onet:elementName|onet:categoryDescription|onet:name ?text .
+                }
+            """,
+            "software": """
+                SELECT DISTINCT ?occupation ?text WHERE {
+                  ?occupation onet:hasSoftware ?link . ?link onet:refersTo ?resource .
+                  ?resource onet:workplaceExample ?text .
+                }
+            """,
+        }
+        for field, query in text_queries.items():
+            for row in self._query(query):
+                document = documents.get(_text(row["occupation"]))
+                if document is not None:
+                    document[field].append(_text(row["text"]))
+
+        connection = sqlite3.connect(path)
+        connection.execute("""
+            CREATE VIRTUAL TABLE occupation_search USING fts5(
+              occupation_uri UNINDEXED, code UNINDEXED, title, alternate_titles,
+              description, tasks, features, software, tokenize='porter unicode61'
+            )
+        """)
+        connection.executemany(
+            "INSERT INTO occupation_search VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ((
+                    document["uri"], document["code"], document["title"],
+                    " | ".join(document["alternate_titles"]), document["description"],
+                    " | ".join(document["tasks"]), " | ".join(document["features"]),
+                    " | ".join(document["software"]),
+                )
+                for document in documents.values()
+            )
+        )
+        connection.execute(
+            "CREATE TABLE bright_outlook (code TEXT PRIMARY KEY, categories TEXT NOT NULL)"
+        )
+        with BRIGHT_OUTLOOK.open(newline="", encoding="utf-8-sig") as source:
+            connection.executemany(
+                "INSERT INTO bright_outlook VALUES (?, ?)",
+                ((row["Code"], row["Categories"]) for row in csv.DictReader(source)),
+            )
+        connection.commit()
+        connection.close()
+
+    def _features(self, occupation: dict, search_terms: list[str]) -> dict:
+        uri = occupation["uri"]
+        education = [
+            {"level": _text(row["level"]), "share": float(_text(row["share"]))}
+            for row in self._query(f"""
+                SELECT ?level ?share WHERE {{
+                  <{uri}> onet:hasRating ?rating .
+                  ?rating rdf:type onet:EducationRating ; onet:refersTo ?category ;
+                    onet:dataValue ?share .
+                  ?category onet:categoryDescription ?level .
+                }} ORDER BY DESC(?share)
+            """)
+        ]
+        all_tasks = [
+            _text(row["task"]) for row in self._query(f"""
+                SELECT ?task WHERE {{ <{uri}> onet:hasTask ?resource .
+                  ?resource onet:task ?task . }}
+            """)
+        ]
+        tasks = sorted(
+            all_tasks,
+            key=lambda task: sum(
+                any(token.startswith(term[:4]) for token in re.findall(r"[a-z0-9]+", task.lower()))
+                for term in search_terms
+            ),
+            reverse=True,
+        )[:6]
+        software = [
+            _text(row["name"]) for row in self._query(f"""
+                SELECT DISTINCT ?name WHERE {{ <{uri}> onet:hasSoftware ?link .
+                  ?link onet:refersTo ?resource .
+                  ?resource onet:workplaceExample ?name . }} LIMIT 8
+            """)
+        ]
+        job_zone_rows = list(self._query(f"""
+            SELECT ?name ?education ?experience ?training WHERE {{
+              <{uri}> onet:hasRating ?rating .
+              ?rating rdf:type onet:JobZoneRating ; onet:refersTo ?zone .
+              ?zone onet:name ?name ; onet:education ?education ;
+                onet:experience ?experience ; onet:jobTraining ?training .
+            }} LIMIT 1
+        """))
+        job_zone = None
+        if job_zone_rows:
+            row = job_zone_rows[0]
+            job_zone = {key: _text(row[key]) for key in (
+                "name", "education", "experience", "training"
+            )}
+        elements = [
+            {
+                "name": _text(row["name"]),
+                "type": _text(row["type"]).rsplit("/", 1)[-1],
+                "score": float(_text(row["score"])),
+            }
+            for row in self._query(f"""
+                SELECT ?name ?type (MAX(?value) AS ?score) WHERE {{
+                  <{uri}> onet:hasRating ?rating .
+                  ?rating rdf:type ?type ; onet:refersTo ?element ; onet:dataValue ?value .
+                  ?element onet:elementName ?name .
+                  FILTER(?type IN (onet:EssentialSkillsRating, onet:KnowledgeRating,
+                    onet:AbilitiesRating, onet:WorkActivitiesRating, onet:WorkStylesRating))
+                }} GROUP BY ?name ?type ORDER BY DESC(?score) LIMIT 12
+            """)
+        ]
+        return {
+            **occupation,
+            "education": education,
+            "tasks": tasks,
+            "software": software,
+            "job_zone": job_zone,
+            "elements": elements,
+        }

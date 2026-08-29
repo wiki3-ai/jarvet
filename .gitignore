@@ -27,6 +27,8 @@ dist/
 
 # Downloaded O*NET graph database
 data/db_*_nt/
+data/ComparisonToolData.xlsx
+data/va-comparison/
 
 # Local environment files
 .env

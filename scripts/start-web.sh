@@ -23,3 +23,17 @@ nohup "${VENV_DIR}/bin/uvicorn" app.main:app \
   >"${LOG_FILE}" 2>&1 &
 
 echo $! >"${PID_FILE}"
+
+for _ in {1..50}; do
+  if curl --fail --silent "http://127.0.0.1:${JARVET_PORT:-8000}/api/health" >/dev/null; then
+    exit 0
+  fi
+  if ! kill -0 "$(cat "${PID_FILE}")" >/dev/null 2>&1; then
+    cat "${LOG_FILE}" >&2
+    exit 1
+  fi
+  sleep 0.2
+done
+
+echo "Jarvet did not become ready on port ${JARVET_PORT:-8000}." >&2
+exit 1

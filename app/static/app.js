@@ -4,7 +4,41 @@ const messagesElement = document.querySelector("#messages");
 const form = document.querySelector("#form");
 const input = document.querySelector("#input");
 const send = document.querySelector("#send");
+const profileElement = document.querySelector("#profile");
+const profileItems = document.querySelector("#profile-items");
+const suggestionsElement = document.querySelector("#suggestions");
 let messages = [];
+let profile = {};
+let selectedOccupation = null;
+
+const startingPoints = [
+  {
+    title: "Benefits",
+    options: [
+      "I was just discharged",
+      "Help me use my GI Bill benefits",
+      "I used all of my GI Bill benefits. What now?",
+      "My benefits expired. What can I do?",
+      "I don't qualify for benefits",
+    ],
+  },
+  {
+    title: "School and training",
+    options: [
+      "I can't find a school for the degree I want",
+      "I want vocational training",
+      "I want on-the-job training",
+      "I want to get paid while I train",
+    ],
+  },
+  {
+    title: "Career ideas",
+    options: [
+      "I want an A+ computer technician certificate",
+      "I want to be an underwater welder",
+    ],
+  },
+];
 
 function addMessage(role, content, extraClass = "") {
   const element = document.createElement("div");
@@ -15,12 +49,99 @@ function addMessage(role, content, extraClass = "") {
   return element;
 }
 
+function renderSuggestions(suggestions = []) {
+  suggestionsElement.replaceChildren();
+  for (const suggestion of suggestions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = suggestion.label;
+    button.addEventListener("click", () => submitMessage(suggestion.value));
+    suggestionsElement.appendChild(button);
+  }
+}
+
+function renderStartingPoints() {
+  const panel = document.createElement("section");
+  panel.className = "starting-points";
+  for (const group of startingPoints) {
+    const section = document.createElement("div");
+    section.className = "starting-group";
+    const title = document.createElement("h2");
+    title.textContent = group.title;
+    section.appendChild(title);
+    for (const option of group.options) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.innerHTML = `<span>${option}</span><span aria-hidden="true">→</span>`;
+      button.addEventListener("click", () => submitMessage(option));
+      section.appendChild(button);
+    }
+    panel.appendChild(section);
+  }
+  messagesElement.appendChild(panel);
+}
+
+function renderResources(resources = []) {
+  if (!resources.length) return;
+  const list = document.createElement("div");
+  list.className = "resource-list";
+  for (const resource of resources) {
+    const link = document.createElement("a");
+    link.href = resource.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.innerHTML = `<span>${resource.label}</span><span aria-hidden="true">↗</span>`;
+    list.appendChild(link);
+  }
+  messagesElement.appendChild(list);
+  messagesElement.scrollTop = messagesElement.scrollHeight;
+}
+
+function renderProfile() {
+  profileItems.replaceChildren();
+  if (selectedOccupation) {
+    const occupation = document.createElement("button");
+    occupation.type = "button";
+    occupation.className = "profile-item";
+    occupation.title = `Stop focusing on ${selectedOccupation.title}`;
+    occupation.textContent = selectedOccupation.title;
+    occupation.addEventListener("click", () => {
+      selectedOccupation = null;
+      renderProfile();
+    });
+    profileItems.appendChild(occupation);
+  }
+  for (const [field, values] of Object.entries(profile)) {
+    for (const value of values) {
+      if (selectedOccupation && value.toLowerCase() === selectedOccupation.title.toLowerCase()) {
+        continue;
+      }
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "profile-item";
+      item.title = `Remove ${value}`;
+      item.textContent = value;
+      item.addEventListener("click", () => {
+        profile[field] = profile[field].filter(entry => entry !== value);
+        renderProfile();
+      });
+      profileItems.appendChild(item);
+    }
+  }
+  profileElement.hidden = profileItems.childElementCount === 0;
+}
+
 function begin() {
   welcome.hidden = true;
   chat.hidden = false;
   messages = [];
+  profile = {};
+  selectedOccupation = null;
   messagesElement.replaceChildren();
-  addMessage("assistant", "What kind of future are you considering? Tell me about work you enjoy, subjects that hold your attention, or a role you are curious about.");
+  renderProfile();
+  addMessage("assistant", "What do you need help with today? Choose a starting point or describe your situation in your own words.");
+  renderStartingPoints();
+  renderSuggestions();
   input.focus();
 }
 
@@ -37,27 +158,33 @@ input.addEventListener("keydown", event => {
   }
 });
 
-form.addEventListener("submit", async event => {
-  event.preventDefault();
-  const content = input.value.trim();
+async function submitMessage(rawContent) {
+  const content = rawContent.trim();
   if (!content) return;
+  document.querySelector(".starting-points")?.remove();
+  renderSuggestions();
   messages.push({ role: "user", content });
   addMessage("user", content);
   input.value = "";
   input.style.height = "auto";
   send.disabled = true;
-  const thinking = addMessage("assistant", "Looking through O*NET…", "thinking");
+  const thinking = addMessage("assistant", "Finding the right path…", "thinking");
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages, profile, selected_occupation: selectedOccupation }),
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || "Request failed");
     thinking.remove();
     messages.push({ role: "assistant", content: body.message });
     addMessage("assistant", body.message);
+    renderResources(body.resources);
+    profile = body.profile || profile;
+    selectedOccupation = body.selected_occupation || selectedOccupation;
+    renderProfile();
+    renderSuggestions(body.suggestions);
   } catch (error) {
     thinking.textContent = `I couldn't reach the guide: ${error.message}`;
     thinking.classList.remove("thinking");
@@ -65,4 +192,9 @@ form.addEventListener("submit", async event => {
     send.disabled = false;
     input.focus();
   }
+}
+
+form.addEventListener("submit", async event => {
+  event.preventDefault();
+  await submitMessage(input.value);
 });
