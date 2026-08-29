@@ -22,6 +22,9 @@ dist/
 .jupyterlab.log
 .jupyterlab.pid
 
+# Downloaded O*NET graph database
+data/db_*_nt/
+
 # Local environment files
 .env
 .env.*

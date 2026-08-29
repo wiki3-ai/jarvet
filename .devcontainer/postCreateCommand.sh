@@ -9,3 +9,4 @@ python3 -m venv "${VENV_DIR}"
 "${VENV_DIR}/bin/pip" install "nmo-python @ git+https://github.com/wiki3-ai/nemo.git@main#subdirectory=nemo-python"
 "${VENV_DIR}/bin/pip" install jupyterlab ipykernel
 "${VENV_DIR}/bin/python" -m ipykernel install --user --name jarvet --display-name "Python (jarvet)"
+"${WORKSPACE_DIR}/scripts/init-onet-data.sh"

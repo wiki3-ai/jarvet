@@ -6,7 +6,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 RUN rm -f /etc/apt/sources.list.d/yarn.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
+    && apt-get install -y --no-install-recommends build-essential unzip \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain stable \
