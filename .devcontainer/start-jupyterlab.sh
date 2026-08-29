@@ -14,7 +14,8 @@ nohup "${VENV_DIR}/bin/jupyter" lab \
   --ip=0.0.0.0 \
   --port="${JUPYTER_PORT:-7788}" \
   --no-browser \
-  --ServerApp.token="${JUPYTER_TOKEN:-jarvet}" \
+  --IdentityProvider.token='' \
+  --PasswordIdentityProvider.hashed_password='' \
   --ServerApp.allow_origin='*' \
   >"${LOG_FILE}" 2>&1 &
 
