@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f1e8">
+  <title>Jarvet | Find your learning path</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main>
+    <section id="welcome" class="welcome">
+      <div class="mark" aria-hidden="true">J</div>
+      <p class="eyebrow">Education pathway guide</p>
+      <h1>Find the learning path<br>that fits your direction.</h1>
+      <p class="intro">Tell Jarvet what you enjoy, what you already know, and where you want work to take you.</p>
+      <button id="start" class="start">Start exploring <span aria-hidden="true">→</span></button>
+      <p class="source">Grounded in the O*NET 31.0 knowledge graph</p>
+    </section>
+
+    <section id="chat" class="chat" hidden>
+      <header>
+        <div class="brand"><span class="mini-mark">J</span><span>Jarvet</span></div>
+        <button id="reset" class="icon-button" title="Start over" aria-label="Start over">↺</button>
+      </header>
+      <div id="messages" class="messages" aria-live="polite"></div>
+      <form id="form" class="composer">
+        <textarea id="input" rows="1" placeholder="What interests you?" aria-label="Your message" required></textarea>
+        <button id="send" type="submit" aria-label="Send message">↑</button>
+      </form>
+      <p class="disclaimer">Occupation insights use O*NET data. Verify programs and admissions with education providers.</p>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

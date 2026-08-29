@@ -14,3 +14,16 @@ To initialize or restore it manually, run:
 
 The script defaults to O*NET 31.0. Set `ONET_VERSION` using underscores to
 download another published version, for example `ONET_VERSION=30_2`.
+
+## Web application
+
+Jarvet runs at `http://localhost:8000` in the devcontainer. Copy `.env.example`
+to `.env`, configure the host LLM, then start the service:
+
+```bash
+./scripts/start-web.sh
+```
+
+The browser never receives the LLM key. For Cloudflare Tunnel, route `jarvet.ai`
+to `http://localhost:8000` inside the container or network namespace where
+`cloudflared` runs.

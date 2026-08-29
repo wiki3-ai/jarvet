@@ -4,12 +4,16 @@
     "dockerfile": "Dockerfile"
   },
   "postCreateCommand": "bash .devcontainer/postCreateCommand.sh",
-  "postStartCommand": "bash .devcontainer/start-jupyterlab.sh",
-  "forwardPorts": [7788],
+  "postStartCommand": "bash .devcontainer/start-services.sh",
+  "forwardPorts": [7788, 8000],
   "portsAttributes": {
     "7788": {
       "label": "JupyterLab",
       "onAutoForward": "notify"
+    },
+    "8000": {
+      "label": "Jarvet",
+      "onAutoForward": "openBrowser"
     }
   },
   "customizations": {

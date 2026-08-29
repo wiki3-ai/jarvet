@@ -21,6 +21,9 @@ dist/
 .ipynb_checkpoints/
 .jupyterlab.log
 .jupyterlab.pid
+.jarvet.log
+.jarvet.pid
+.cache/
 
 # Downloaded O*NET graph database
 data/db_*_nt/
