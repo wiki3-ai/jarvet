@@ -42,6 +42,62 @@ const startingPoints = [
   },
 ];
 
+const missionOpeners = {
+  "Help me get started finding an education or career path.": {
+    message: "Let's find your fastest path. First, do you currently have VA education benefits, such as the GI Bill or VR&E, that you may be eligible to use?",
+    suggestions: [
+      "Yes, I have GI Bill benefits",
+      "I have a disability rating / VR&E",
+      "I thought my GI Bill was gone",
+      "Not sure what I have",
+    ],
+  },
+  "Help me understand how I can get paid to go to school.": {
+    message: "Here are the main ways school may be funded:\n\n• Post-9/11 GI Bill can pay tuition directly to the school and may include a monthly housing allowance and book stipend.\n• Yellow Ribbon can help with tuition above the GI Bill cap at participating schools.\n• VR&E may fund training and provide a subsistence allowance for eligible Veterans with a service-connected disability.\n• If your GI Bill eligibility period ended, there may be circumstances where you can request an extension. Eligibility depends on your situation, so we'll verify the official path before you act.",
+    suggestions: [
+      "How do I request an extension?",
+      "Do I qualify for VR&E?",
+      "I'm out of GI Bill months",
+      "Help me understand FAFSA",
+    ],
+  },
+  "I want to earn a paycheck while I train.": {
+    message: "GI Bill On-the-Job Training and apprenticeships let you work in a real paid job while learning the role. Your employer pays wages, which generally increase as your skills progress, and eligible Veterans may also receive a monthly GI Bill payment that steps down as wages rise.\n\nTell me a location and the kind of work you want, and I'll look for relevant approved opportunities.",
+    suggestions: [
+      "On-the-job training in Texas",
+      "Apprenticeships nationwide",
+      "How much would I actually get paid?",
+      "I want A+ certification",
+    ],
+  },
+  "Help me figure out what to study.": {
+    message: "We can work backward from a career goal, compare occupations using O*NET evidence, and then find matching degree or certificate programs by location. You do not need to know the school first.\n\nChoose an example below, or tell me where you live and what kind of work interests you.",
+    suggestions: [
+      "Marketing programs in California",
+      "Nursing programs in Texas",
+      "Welding certificates near me",
+      "Help me explore careers first",
+    ],
+  },
+  "I want an A+ computer technician certification.": {
+    message: "CompTIA A+ can be a direct route into entry-level IT support work. GI Bill or VR&E may fund approved training, some employers offer IT support apprenticeships or OJT, and eligible licensing or certification test fees may be reimbursable separately from tuition. WIOA may also fund short credentials for eligible job seekers.\n\nTell me your location and we'll find the most relevant route.",
+    suggestions: [
+      "Find A+ training programs near me",
+      "Find an IT apprenticeship instead",
+      "I don't have GI Bill benefits left",
+    ],
+  },
+  "Help me understand education benefits for my family.": {
+    message: "Several programs may support a spouse or child:\n\n• Transfer of Post-9/11 GI Bill benefits generally must be requested while you are still serving and may carry a service obligation.\n• The Fry Scholarship may support eligible children or surviving spouses of a service member who died in the line of duty.\n• Chapter 35 may support eligible dependents of a Veteran who is permanently and totally disabled due to service, or who died from a service-connected cause.\n• Some states offer dependent tuition waivers with their own residency and eligibility rules.",
+    suggestions: [
+      "How do I transfer my GI Bill?",
+      "Do I qualify for Chapter 35?",
+      "Find state tuition waivers",
+      "Tell me about the Fry Scholarship",
+    ],
+  },
+};
+
 function appendLinkedText(element, content, resources) {
   const links = resources.flatMap(resource =>
     (resource.inline_labels || []).map(label => ({
@@ -172,7 +228,7 @@ function renderProfile() {
   profileElement.hidden = profileItems.childElementCount === 0;
 }
 
-function begin() {
+function begin(options = {}) {
   welcome.hidden = true;
   chat.hidden = false;
   messages = [];
@@ -180,26 +236,38 @@ function begin() {
   selectedOccupation = null;
   messagesElement.replaceChildren();
   renderProfile();
-  addMessage("assistant", "What do you need help with today? Choose a starting point or describe your situation in your own words.");
-  renderStartingPoints();
-  renderSuggestions();
+  addMessage("assistant", options.message || "What do you need help with today? Choose a starting point or describe your situation in your own words.");
+  if (options.message) {
+    messages.push({ role: "assistant", content: options.message });
+  } else {
+    renderStartingPoints();
+  }
+  renderSuggestions((options.suggestions || []).map(label => ({ label, value: label })));
   input.focus();
 }
 
-function beginWithMessage(content) {
-  begin();
-  submitMessage(content);
+function beginWithMission(content) {
+  const opener = missionOpeners[content];
+  if (!opener) {
+    begin();
+    submitMessage(content);
+    return;
+  }
+  begin(opener);
 }
 
 welcomeForm.addEventListener("submit", event => {
   event.preventDefault();
   const content = welcomeInput.value.trim();
-  if (content) beginWithMessage(content);
+  if (content) {
+    begin();
+    submitMessage(content);
+  }
 });
 for (const mission of document.querySelectorAll(".mission")) {
-  mission.addEventListener("click", () => beginWithMessage(mission.dataset.message));
+  mission.addEventListener("click", () => beginWithMission(mission.dataset.message));
 }
-document.querySelector("#reset").addEventListener("click", begin);
+document.querySelector("#reset").addEventListener("click", () => begin());
 input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = `${Math.min(input.scrollHeight, 140)}px`;

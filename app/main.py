@@ -185,6 +185,63 @@ def parse_turn(content: str, profile: dict[str, list[str]]) -> dict[str, Any]:
     }
 
 
+def complete_suggestions(
+    suggestions: list[dict[str, str]], message: str, profile: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    context = message.lower()
+    locations = profile.get("location", [])
+    if re.search(r"what (?:career|kind of work)|career or work goal|field.*interest|healthcare,? trades", context):
+        fallbacks = [
+            {"label": "Healthcare", "value": "I'm interested in healthcare careers."},
+            {"label": "Skilled trades", "value": "I'm interested in skilled trades careers."},
+            {"label": "Technology", "value": "I'm interested in technology careers."},
+            {"label": "Business or another field", "value": "I'm interested in business, or I want to explore another field."},
+        ]
+    elif re.search(r"where (?:do you|are you)|what (?:city|state|location)|zip code|your location", context):
+        fallbacks = []
+        if locations:
+            fallbacks.append({
+                "label": f"Use {locations[-1]}"[:48],
+                "value": f"Use my saved location: {locations[-1]}",
+            })
+        fallbacks.extend([
+            {"label": "Search nationwide", "value": "Search nationwide instead of limiting by location."},
+            {"label": "Show remote options", "value": "Show me remote or online options."},
+            {"label": "Skip location for now", "value": "Continue without using my location for now."},
+        ])
+    elif re.search(r"gi bill|vr&e|education benefits|benefit eligibility|benefits.*(?:have|use|left)", context):
+        fallbacks = [
+            {"label": "Use my GI Bill", "value": "Help me use my GI Bill benefits."},
+            {"label": "Explore VR&E", "value": "Help me understand whether VR&E could apply to me."},
+            {"label": "Check remaining benefits", "value": "Help me check my remaining education benefits."},
+            {"label": "Compare other funding", "value": "Show me education funding options beyond the GI Bill."},
+        ]
+    elif re.search(r"degree|certificate|school|training|apprenticeship|on-the-job", context):
+        fallbacks = [
+            {"label": "Find degree programs", "value": "Help me find relevant degree programs."},
+            {"label": "Find certificate training", "value": "Help me find a shorter certificate or training program."},
+            {"label": "Earn while I train", "value": "Find apprenticeship or on-the-job training options."},
+            {"label": "Compare career paths", "value": "Help me compare related career paths first."},
+        ]
+    else:
+        fallbacks = [
+            {"label": "Explore career ideas", "value": "Help me explore career ideas that fit me."},
+            {"label": "Find school or training", "value": "Help me find school or training options."},
+            {"label": "Earn while I train", "value": "Help me find paid training or apprenticeships."},
+            {"label": "Understand my benefits", "value": "Help me understand which education benefits I can use."},
+        ]
+
+    completed = list(suggestions[:4])
+    seen = {item["label"].casefold() for item in completed}
+    for fallback in fallbacks:
+        if len(completed) >= 4:
+            break
+        if fallback["label"].casefold() not in seen:
+            completed.append(fallback)
+            seen.add(fallback["label"].casefold())
+    return completed
+
+
 def retain_explicit_context(
     previous: dict[str, list[str]], updated: dict[str, list[str]], user_message: str,
 ) -> dict[str, list[str]]:
@@ -242,6 +299,9 @@ async def chat(request: ChatRequest):
     turn = parse_turn(result["content"], profile)
     turn["profile"] = retain_explicit_context(
         profile, turn["profile"], request.messages[-1].content,
+    )
+    turn["suggestions"] = complete_suggestions(
+        turn["suggestions"], turn["message"], turn["profile"],
     )
     location = result.get("resolved_location")
     if location:
