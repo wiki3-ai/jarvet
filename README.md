@@ -61,7 +61,9 @@ applicable dates.
 
 Provider cards supplement the workbook with the public VA institution API's
 school certifying official, current comparison fields, and complete approved
-IHL, non-college-degree, OJT, or apprenticeship inventories. Raw API responses
+IHL, non-college-degree, or combined OJT/apprenticeship inventories. VA returns
+apprenticeships through its OJT program endpoint and identifies them with a
+per-program subtype, which Jarvet preserves in card labels. Raw API responses
 are cached by facility code in `.cache/va-comparison.sqlite` for seven days;
 stale data is used if VA is temporarily unavailable. Program lists are filtered
 against the current career and study direction and summarized in the card, with

@@ -29,13 +29,20 @@ STATE_NAMES = {
 PROGRAM_LABELS = {
     "IHL": "Degree programs",
     "NCD": "Certificate and non-college programs",
-    "OJT": "On-the-job training",
-    "APP": "Apprenticeships",
+    "OJT": "On-the-job training and apprenticeships",
 }
 PROGRAM_STOP_WORDS = {
     "about", "and", "career", "certificate", "degree", "find", "for", "from",
     "help", "near", "program", "programs", "school", "study", "the", "training",
     "want", "with",
+}
+PROGRAM_CONTEXT_EXPANSIONS = {
+    "healthcare": {
+        "ambulatory", "case", "clinical", "coder", "health", "hospital", "medical",
+        "nursing", "patient", "radiologic", "sterile", "surgical",
+    },
+    "technology": {"computer", "cyber", "data", "information", "network", "software"},
+    "trades": {"carpenter", "construction", "electrical", "electrician", "hvac", "plumbing", "welding"},
 }
 
 
@@ -116,27 +123,49 @@ class VaComparison:
             term for term in _normalized(context).split()
             if len(term) >= 3 and term not in PROGRAM_STOP_WORDS
         }
+        for term in list(terms):
+            terms.update(PROGRAM_CONTEXT_EXPANSIONS.get(term, set()))
         summaries = []
         for program_type in attributes.get("program_types") or programs:
             code = str(program_type).upper()
             items = programs.get(code, [])
             ranked = []
+            category_counts: dict[str, int] = {}
             for position, item in enumerate(items):
                 description = str(item.get("description") or "").strip()
                 words = set(_normalized(description).split())
                 score = len(words & terms)
                 if description:
-                    ranked.append((score, position, description))
+                    subtype = str(item.get("ojt_app_type") or "").upper()
+                    category = (
+                        "Apprenticeship" if subtype == "APP"
+                        else "On-the-job training" if code == "OJT" and subtype == "OJT"
+                        else "Approved training" if code == "OJT"
+                        else ""
+                    )
+                    if category:
+                        category_counts[category] = category_counts.get(category, 0) + 1
+                    ranked.append((score, position, description, category))
             matches = [item for item in ranked if item[0] > 0]
             chosen = sorted(matches, key=lambda item: (-item[0], item[1]))[:6]
+            selection = "relevant"
             if not terms:
                 chosen = ranked[:6]
+                selection = "all"
+            elif not chosen:
+                chosen = ranked[:6]
+                selection = "sample"
             summaries.append({
                 "type": code,
                 "label": PROGRAM_LABELS.get(code, f"{code} programs"),
                 "total": len(ranked),
                 "matching": len(matches) if terms else len(ranked),
-                "programs": [item[2] for item in chosen],
+                "selection": selection,
+                "category_counts": category_counts,
+                "programs": [
+                    {"name": item[2], "category": item[3]}
+                    for item in chosen
+                ],
             })
         return {
             "facility_code": attributes.get("facility_code") or facility_code,

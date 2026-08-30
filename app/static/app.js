@@ -16,6 +16,8 @@ let messages = [];
 let profile = {};
 let selectedOccupation = null;
 let savedProviders = [];
+let directionRevision = 0;
+let activeChatController = null;
 
 function loadRememberedDirection() {
   try {
@@ -42,6 +44,25 @@ function persistDirection() {
 
 function clearRememberedDirection() {
   localStorage.removeItem(directionStorageKey);
+}
+
+function resetDirectionState() {
+  directionRevision += 1;
+  activeChatController?.abort();
+  activeChatController = null;
+  profile = {};
+  selectedOccupation = null;
+  savedProviders = [];
+  rememberDirection.checked = false;
+  clearRememberedDirection();
+  renderProfile();
+  for (const button of document.querySelectorAll(".save-provider")) {
+    button.classList.remove("saved");
+    button.setAttribute("aria-pressed", "false");
+    button.title = "Save provider to memory";
+    button.innerHTML = '<span aria-hidden="true">☆</span><span>Save</span>';
+  }
+  send.disabled = false;
 }
 
 const startingPoints = [
@@ -315,11 +336,42 @@ function renderResources(resources = []) {
       const heading = document.createElement("h4");
       heading.textContent = `${summaryData.label} (${summaryData.total})`;
       programSection.appendChild(heading);
+      const categoryCountLabel = (category, count) => {
+        if (category === "Apprenticeship") {
+          return `${count} apprenticeship${count === 1 ? "" : "s"}`;
+        }
+        if (category === "On-the-job training") {
+          return `${count} OJT program${count === 1 ? "" : "s"}`;
+        }
+        return `${count} other approved program${count === 1 ? "" : "s"}`;
+      };
+      const categoryCounts = Object.entries(summaryData.category_counts || {})
+        .filter(([, count]) => count > 0)
+        .map(([category, count]) => categoryCountLabel(category, count));
+      if (categoryCounts.length) {
+        const breakdown = document.createElement("p");
+        breakdown.className = "program-breakdown";
+        breakdown.textContent = categoryCounts.join(" · ");
+        programSection.appendChild(breakdown);
+      }
       if (summaryData.programs?.length) {
+        if (summaryData.selection === "sample") {
+          const sampleNote = document.createElement("p");
+          sampleNote.textContent = "No close title match; showing approved programs from this provider.";
+          programSection.appendChild(sampleNote);
+        }
         const programs = document.createElement("ul");
         for (const program of summaryData.programs) {
           const item = document.createElement("li");
-          item.textContent = program;
+          const programName = typeof program === "string" ? program : program.name;
+          const programCategory = typeof program === "string" ? "" : program.category;
+          item.textContent = programName;
+          if (programCategory) {
+            const category = document.createElement("span");
+            category.className = "program-category";
+            category.textContent = programCategory;
+            item.appendChild(category);
+          }
           programs.appendChild(item);
         }
         programSection.appendChild(programs);
@@ -504,12 +556,7 @@ rememberDirection.addEventListener("change", () => {
   else clearRememberedDirection();
 });
 resetDirection.addEventListener("click", () => {
-  profile = {};
-  selectedOccupation = null;
-  savedProviders = [];
-  renderProfile();
-  if (rememberDirection.checked) persistDirection();
-  else clearRememberedDirection();
+  resetDirectionState();
 });
 input.addEventListener("input", () => {
   input.style.height = "auto";
@@ -533,10 +580,14 @@ async function submitMessage(rawContent) {
   input.style.height = "auto";
   send.disabled = true;
   const thinking = addMessage("assistant", "Finding the right path…", "thinking");
+  const requestRevision = directionRevision;
+  const controller = new AbortController();
+  activeChatController = controller;
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         messages,
         profile,
@@ -546,6 +597,10 @@ async function submitMessage(rawContent) {
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || "Request failed");
+    if (requestRevision !== directionRevision) {
+      thinking.remove();
+      return;
+    }
     thinking.remove();
     messages.push({ role: "assistant", content: body.message });
     addMessage("assistant", body.message, "", body.resources || []);
@@ -556,10 +611,17 @@ async function submitMessage(rawContent) {
     persistDirection();
     renderSuggestions(body.suggestions);
   } catch (error) {
+    if (error.name === "AbortError") {
+      thinking.remove();
+      return;
+    }
     thinking.textContent = `I couldn't reach the guide: ${error.message}`;
     thinking.classList.remove("thinking");
   } finally {
-    send.disabled = false;
+    if (activeChatController === controller) {
+      activeChatController = null;
+      send.disabled = false;
+    }
     input.focus();
   }
 }

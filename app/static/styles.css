@@ -105,7 +105,10 @@ main { min-height: 100dvh; position: relative; }
 .program-summary { margin-top: 11px; }
 .program-summary h4 { margin: 0 0 5px; font-size: 11px; }
 .program-summary ul { margin: 0; padding-left: 17px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.program-summary li { margin-bottom: 4px; }
 .program-summary p { margin: 5px 0; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.program-summary .program-breakdown { margin-top: -2px; color: var(--ink); font-weight: 600; }
+.program-category { display: inline-block; margin-left: 6px; padding: 1px 4px; border: 1px solid var(--line); border-radius: 2px; color: var(--leaf); background: #fffdf7; font-size: 9px; font-weight: 600; }
 .program-summary a { display: inline-block; margin-top: 5px; color: var(--accent); font-size: 10px; font-weight: 600; text-decoration: none; }
 .saved-provider-item { border-color: var(--accent); }
 .official-resources { grid-column: 1 / -1; }
