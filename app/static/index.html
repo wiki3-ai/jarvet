@@ -3,22 +3,67 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f1e8">
+  <meta name="theme-color" content="#ede6d6">
   <title>Jarvet | Find your learning path</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Stencil:wght@700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <main>
     <section id="welcome" class="welcome">
-      <div class="mark" aria-hidden="true">J</div>
-      <p class="eyebrow">Education and career guide for Veterans</p>
-      <h1>Turn your benefits<br>into a direction.</h1>
-      <p class="intro">Start with the situation you are in now. Jarvet connects official VA education resources with career and training evidence from O*NET.</p>
-      <button id="start" class="start">Find a starting point <span aria-hidden="true">→</span></button>
-      <p class="source">Official VA pathways + O*NET 31.0 occupation data</p>
+      <header class="landing-header">
+        <div class="landing-brand">
+          <span class="landing-mark" aria-hidden="true"><span>J</span></span>
+          <span>JARVET<strong>.AI</strong></span>
+        </div>
+        <div class="status"><span class="status-dot"></span>PROOF OF CONCEPT</div>
+      </header>
+
+      <div class="landing-content">
+        <section class="hero">
+          <span class="eyebrow">EDUCATION — PROOF OF CONCEPT</span>
+          <h1>JARVET<span>.AI</span></h1>
+          <p class="tagline">There's always an option — even when it feels like there aren't any.</p>
+          <p class="intro">Tell Jarvet where you are now. It connects official Veteran benefit resources with real career, training, school, and approved-provider data.</p>
+        </section>
+
+        <form id="welcome-form" class="welcome-composer">
+          <label for="welcome-input">ASK JARVET</label>
+          <div class="welcome-input-row">
+            <textarea id="welcome-input" rows="1" placeholder="What are you trying to do?" aria-label="Ask Jarvet" required></textarea>
+            <button type="submit" aria-label="Start conversation">START <span aria-hidden="true">→</span></button>
+          </div>
+        </form>
+
+        <div class="entry-label"><span>SELECT AN ENTRY POINT</span></div>
+        <div class="missions">
+          <button class="mission" type="button" data-message="Help me get started finding an education or career path.">
+            <span class="callsign">CALLSIGN: ALPHA</span><strong>Help me get started</strong><small>Share where you are, get a practical next step.</small><span class="open">OPEN CHANNEL</span>
+          </button>
+          <button class="mission" type="button" data-message="Help me understand how I can get paid to go to school.">
+            <span class="callsign">CALLSIGN: BRAVO</span><strong>Get paid to go to school</strong><small>GI Bill, Yellow Ribbon, VR&amp;E, and other options.</small><span class="open">OPEN CHANNEL</span>
+          </button>
+          <button class="mission" type="button" data-message="I want to earn a paycheck while I train.">
+            <span class="callsign">CALLSIGN: CHARLIE</span><strong>Earn a paycheck while you train</strong><small>Relevant apprenticeships and VA-approved OJT.</small><span class="open">OPEN CHANNEL</span>
+          </button>
+          <button class="mission" type="button" data-message="Help me figure out what to study.">
+            <span class="callsign">CALLSIGN: DELTA</span><strong>Figure out what to study</strong><small>Connect a career goal to real local programs.</small><span class="open">OPEN CHANNEL</span>
+          </button>
+          <button class="mission" type="button" data-message="I want an A+ computer technician certification.">
+            <span class="callsign">CALLSIGN: ECHO</span><strong>I want an A+ certification</strong><small>Training, funding, and certification pathways.</small><span class="open">OPEN CHANNEL</span>
+          </button>
+          <button class="mission" type="button" data-message="Help me understand education benefits for my family.">
+            <span class="callsign">CALLSIGN: FOXTROT</span><strong>Pay for my family's education</strong><small>Transfer benefits, Fry, Chapter 35, and state support.</small><span class="open">OPEN CHANNEL</span>
+          </button>
+        </div>
+      </div>
+
+      <footer class="landing-footer">
+        <span></span>
+        PROOF OF CONCEPT — not an official VA benefits determination.
+      </footer>
     </section>
 
     <section id="chat" class="chat" hidden>

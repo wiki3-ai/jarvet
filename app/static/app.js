@@ -7,6 +7,8 @@ const send = document.querySelector("#send");
 const profileElement = document.querySelector("#profile");
 const profileItems = document.querySelector("#profile-items");
 const suggestionsElement = document.querySelector("#suggestions");
+const welcomeForm = document.querySelector("#welcome-form");
+const welcomeInput = document.querySelector("#welcome-input");
 let messages = [];
 let profile = {};
 let selectedOccupation = null;
@@ -184,7 +186,19 @@ function begin() {
   input.focus();
 }
 
-document.querySelector("#start").addEventListener("click", begin);
+function beginWithMessage(content) {
+  begin();
+  submitMessage(content);
+}
+
+welcomeForm.addEventListener("submit", event => {
+  event.preventDefault();
+  const content = welcomeInput.value.trim();
+  if (content) beginWithMessage(content);
+});
+for (const mission of document.querySelectorAll(".mission")) {
+  mission.addEventListener("click", () => beginWithMessage(mission.dataset.message));
+}
 document.querySelector("#reset").addEventListener("click", begin);
 input.addEventListener("input", () => {
   input.style.height = "auto";
