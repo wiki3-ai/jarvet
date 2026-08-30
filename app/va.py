@@ -250,6 +250,10 @@ class VaComparison:
     def _record(row: sqlite3.Row, distance: float | None = None) -> dict[str, Any]:
         return {
             "facility_code": row["facility_code"],
+            "detail_url": (
+                "https://www.va.gov/education/gi-bill-comparison-tool/institution/"
+                + row["facility_code"]
+            ),
             "institution": row["institution"],
             "city": row["city"],
             "state": row["state"],
@@ -270,3 +274,28 @@ class VaComparison:
             "school_closing": bool(row["school_closing"]),
             "credit_for_military_training": bool(row["credit_for_mil_training"]),
         }
+
+    def find_facility(self, query: str) -> dict[str, Any] | None:
+        normalized = _normalized(query)
+        if not normalized:
+            return None
+        exact_code = self._database().execute(
+            "SELECT * FROM facilities WHERE facility_code = ? COLLATE NOCASE AND approved = 1",
+            (query.strip(),),
+        ).fetchone()
+        if exact_code:
+            return self._record(exact_code)
+        rows = self._database().execute("SELECT * FROM facilities WHERE approved = 1")
+        best = None
+        best_score = 0.0
+        query_terms = set(normalized.split())
+        for row in rows:
+            name = _normalized(row["institution"])
+            if name == normalized:
+                return self._record(row)
+            name_terms = set(name.split())
+            score = len(query_terms & name_terms) / max(len(query_terms), 1)
+            if score > best_score and (normalized in name or score >= 0.75):
+                best = row
+                best_score = score
+        return self._record(best) if best is not None else None

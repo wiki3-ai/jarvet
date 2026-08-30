@@ -101,6 +101,18 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "get_va_facility",
+            "description": "Find one previously named VA-approved provider by exact facility code or institution name and attach its official VA detail-page link. Use for follow-ups asking for a provider link or details.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Facility code or full provider name."}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_official_resources",
             "description": "Attach trusted official action links relevant to the user's need.",
             "parameters": {
@@ -216,6 +228,11 @@ class JarvetTools:
                 employer=provider_type == "employer", limit=limit, max_miles=radius,
             )
             self._add_resource(self.official_resources["compare"])
+            for facility in facilities[:4]:
+                self._add_resource({
+                    "label": f"View {facility['institution']} in the VA Comparison Tool",
+                    "url": facility["detail_url"],
+                })
             return {
                 "location": location["label"],
                 "provider_type": provider_type,
@@ -224,6 +241,20 @@ class JarvetTools:
                 "facilities": facilities,
                 "source": "VA GI Bill Comparison Tool",
                 "note": "Name-keyword relevance is a lead, not confirmation of a specific approved program. Published housing rates are not personal payment quotes.",
+            }
+
+        if name == "get_va_facility":
+            facility = self.va.find_facility(str(arguments.get("query", "")))
+            if facility is None:
+                return {"error": "No approved VA facility matched that name or code."}
+            self._add_resource({
+                "label": f"View {facility['institution']} in the VA Comparison Tool",
+                "url": facility["detail_url"],
+            })
+            return {
+                "facility": facility,
+                "source": "VA GI Bill Comparison Tool",
+                "note": "This official detail page verifies the facility record. Contact and current program availability may still require provider confirmation.",
             }
 
         if name == "get_official_resources":
@@ -254,6 +285,7 @@ Operating principles:
 - Accept city/state, region, or ZIP. "Near me" means the known profile location. Never interpret pronouns as state abbreviations and never demand a ZIP when a named area is known.
 - When local results are empty, broaden geography for the SAME occupation: try a larger radius or explain the exact-source gap. Never switch occupations or interests merely to produce a result. Call get_related_occupations only if the user explicitly asks for alternatives or agrees to broaden occupationally.
 - For OJT/employer searches, use specific occupation-relevant keywords. Do not present arbitrary nearby approved employers as relevant. A keyword name match is still only a lead to verify in the official VA tool.
+- Every recommended VA facility must have its official facility-detail resource attached. For a follow-up asking for a provider's link, call get_va_facility instead of returning only a general VA page.
 - My Next Move/IPEDS results are school programs, not employer OJT. VA employer facilities are approved providers, but their names alone do not prove a particular trade program.
 - Published housing/living allowance is a facility reference, not a personal payment quote. Eligibility and payment depend on the veteran's circumstances.
 - Ask at most one question, only when a missing fact blocks useful action. Otherwise use the tools and answer.

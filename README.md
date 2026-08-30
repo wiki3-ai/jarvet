@@ -79,7 +79,10 @@ providers over a chosen radius, or attach official resources. Python validates
 tool arguments and returns structured source facts; it does not automatically
 switch occupations or inject the nearest unrelated provider when a search is
 empty. Geographic broadening and occupational broadening are separate actions,
-and related occupations are available only through an explicit agent tool.
+and related occupations are available only through an explicit agent tool. Each
+recommended VA provider includes a facility-specific VA Comparison Tool detail
+link derived from its official facility code. Exact provider-name or code lookup
+also supports follow-up requests for the link to a previously named provider.
 
 Benefit, school, vocational, and on-the-job-training starting points link to
 official VA.gov guidance and the GI Bill Comparison Tool. Jarvet does not make
