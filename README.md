@@ -95,7 +95,13 @@ representative ZIP from its local VA and Census indexes because the My Next Move
 endpoint itself accepts only ZIP codes. Those results are based on the current
 IPEDS directory and completions data plus the CIP to O*NET-SOC crosswalk. Jarvet
 shows recent-award counts as evidence of program activity, not as a quality
-ranking, and links back to the source and participating schools.
+ranking. For each displayed result, Jarvet performs a bounded crawl of the
+institution's own site and verifies subject terms before promoting a program,
+degree, certificate, curriculum, or catalog page. If no official program page
+can be verified, the action is labeled as a My Next Move source listing instead
+of presenting the institution homepage as program details. Trusted program and
+provider actions are linked at their names in the response and repeated in the
+resource list below it.
 My Next Move/IPEDS identifies occupation-related school programs; the VA index
 separately verifies approved facilities and supplies benefit comparison facts.
 Nearby approved employer records are proximity leads, not proof that an employer

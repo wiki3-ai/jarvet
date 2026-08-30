@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 import httpx
 
 from app.onet import OnetGraph
+from app.programs import discover_program_pages
 from app.va import VaComparison
 
 TrainingFetcher = Callable[[str, str], Awaitable[list[dict[str, str]] | None]]
@@ -141,11 +142,14 @@ class JarvetTools:
         self.official_resources = official_resources
         self.selected = selected
         self.matches: list[dict[str, Any]] = []
-        self.resources: list[dict[str, str]] = []
+        self.resources: list[dict[str, Any]] = []
         self.resolved_location: dict[str, Any] | None = None
 
-    def _add_resource(self, resource: dict[str, str]) -> None:
-        if resource.get("url") and all(item["url"] != resource["url"] for item in self.resources):
+    def _add_resource(self, resource: dict[str, Any]) -> None:
+        if resource.get("url") and all(
+            (item["url"], item["label"]) != (resource["url"], resource["label"])
+            for item in self.resources
+        ):
             self.resources.append(resource)
 
     async def call(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -194,22 +198,34 @@ class JarvetTools:
                 f"?zip={location['representative_zip']}"
             )
             if programs:
+                programs = await discover_program_pages(programs[:4])
                 self._add_resource({
                     "label": f"Find {occupation['title']} training near {location['label']}",
                     "url": source_url,
                 })
                 for program in programs[:4]:
-                    if program.get("url"):
-                        self._add_resource({
-                            "label": f"{program['program']} at {program['school']}",
-                            "url": program["url"],
-                        })
+                    program_url = program.get("program_url")
+                    self._add_resource({
+                        "label": (
+                            f"View {program['program']} details at {program['school']}"
+                            if program_url else
+                            f"View the source listing for {program['program']} at {program['school']}"
+                        ),
+                        "url": program_url or source_url,
+                        "inline_labels": [program["school"]],
+                        "kind": "program-details" if program_url else "source-listing",
+                    })
             return {
                 "occupation": self.selected or {"code": occupation["code"], "title": occupation["title"]},
                 "location": location["label"],
                 "programs": programs or [],
                 "source": "My Next Move for Veterans / IPEDS",
-                "note": "Results are for this exact occupation only. Recent awards are context, not quality rankings.",
+                "note": (
+                    "Results are for this exact occupation only. A verified_official_program_page "
+                    "links to institution program details; source_listing_only links back to the "
+                    "exact My Next Move results page and must not be described as a direct program "
+                    "page. Recent awards are context, not quality rankings."
+                ),
             }
 
         if name == "find_va_facilities":
@@ -232,6 +248,8 @@ class JarvetTools:
                 self._add_resource({
                     "label": f"View {facility['institution']} in the VA Comparison Tool",
                     "url": facility["detail_url"],
+                    "inline_labels": [facility["institution"]],
+                    "kind": "provider-details",
                 })
             return {
                 "location": location["label"],
@@ -250,6 +268,8 @@ class JarvetTools:
             self._add_resource({
                 "label": f"View {facility['institution']} in the VA Comparison Tool",
                 "url": facility["detail_url"],
+                "inline_labels": [facility["institution"]],
+                "kind": "provider-details",
             })
             return {
                 "facility": facility,
@@ -286,6 +306,9 @@ Operating principles:
 - When local results are empty, broaden geography for the SAME occupation: try a larger radius or explain the exact-source gap. Never switch occupations or interests merely to produce a result. Call get_related_occupations only if the user explicitly asks for alternatives or agrees to broaden occupationally.
 - For OJT/employer searches, use specific occupation-relevant keywords. Do not present arbitrary nearby approved employers as relevant. A keyword name match is still only a lead to verify in the official VA tool.
 - Every recommended VA facility must have its official facility-detail resource attached. For a follow-up asking for a provider's link, call get_va_facility instead of returning only a general VA page.
+- Local training results may include a verified program_url from the institution's official website. Distinguish it from school_url and source_url. Recommend program details using program_url when present; never describe an institution homepage as program details.
+- Respect each training result's link_status. Say a result has direct program details only for verified_official_program_page. Describe source_listing_only as the My Next Move source listing, never as a direct program page.
+- When naming specific programs or providers in the final answer, mention only results that have an attached resource. Keep the shortlist focused rather than listing unlinked results returned by a tool.
 - My Next Move/IPEDS results are school programs, not employer OJT. VA employer facilities are approved providers, but their names alone do not prove a particular trade program.
 - Published housing/living allowance is a facility reference, not a personal payment quote. Eligibility and payment depend on the veteran's circumstances.
 - Ask at most one question, only when a missing fact blocks useful action. Otherwise use the tools and answer.

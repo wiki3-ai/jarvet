@@ -140,6 +140,21 @@ def clean_profile(raw: Any, fallback: dict[str, list[str]]) -> dict[str, list[st
     return profile
 
 
+def clean_message(content: str) -> str:
+    content = re.sub(
+        r"(?im)^\s*(?:Program details|Program info|School website|Official Resources?):\s*"
+        r"https?://\S+\s*$",
+        "",
+        content,
+    )
+    content = re.sub(r"https?://\S+", "", content)
+    content = re.sub(r"(?m)^\s*(?:Program details|Program info|School website|Official Resources?):\s*$", "", content)
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    content = re.sub(r"\*\*(.+?)\*\*", r"\1", content)
+    content = re.sub(r"(?m)^\s*[-*]\s+", "- ", content)
+    return content.strip()
+
+
 def parse_turn(content: str, profile: dict[str, list[str]]) -> dict[str, Any]:
     candidate = content.strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, re.DOTALL)
@@ -152,7 +167,7 @@ def parse_turn(content: str, profile: dict[str, list[str]]) -> dict[str, Any]:
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
-        return {"message": content, "suggestions": [], "profile": profile}
+        return {"message": clean_message(content), "suggestions": [], "profile": profile}
 
     suggestions = []
     for item in parsed.get("suggestions", []):
@@ -162,9 +177,7 @@ def parse_turn(content: str, profile: dict[str, list[str]]) -> dict[str, Any]:
         value = str(item.get("value", label)).strip()
         if label and value:
             suggestions.append({"label": label[:48], "value": value[:240]})
-    message = str(parsed.get("message", "")).strip() or content
-    message = re.sub(r"\*\*(.+?)\*\*", r"\1", message)
-    message = re.sub(r"(?m)^\s*[-*]\s+", "- ", message)
+    message = clean_message(str(parsed.get("message", "")).strip() or content)
     return {
         "message": message,
         "suggestions": suggestions[:4],

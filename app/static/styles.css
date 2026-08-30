@@ -64,3 +64,14 @@ textarea { resize: none; border: 0; outline: 0; padding: 10px; color: var(--ink)
 @keyframes arrive { from { opacity: 0; transform: translateY(7px); } }
 @media (max-width: 700px) { .starting-points { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .welcome { justify-content: flex-start; padding-top: 40px; } .mark { margin-bottom: 36px; } h1 { font-size: 46px; } .chat { padding: 0 14px; } .message { max-width: 88%; } }
+
+.message.assistant a {
+  color: #075985;
+  font-weight: 650;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.message.assistant a:hover {
+  color: #0c4a6e;
+}

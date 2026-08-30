@@ -40,10 +40,49 @@ const startingPoints = [
   },
 ];
 
-function addMessage(role, content, extraClass = "") {
+function appendLinkedText(element, content, resources) {
+  const links = resources.flatMap(resource =>
+    (resource.inline_labels || []).map(label => ({
+      label,
+      url: resource.url,
+      priority: resource.kind === "program-details" ? 3
+        : resource.kind === "provider-details" ? 2 : 1,
+    }))
+  ).filter(link => link.label && link.url)
+    .sort((first, second) => second.label.length - first.label.length
+      || second.priority - first.priority);
+  if (!links.length) {
+    element.textContent = content;
+    return;
+  }
+
+  const escaped = links.map(link => link.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
+  const byLabel = new Map();
+  for (const link of links) {
+    if (!byLabel.has(link.label.toLowerCase())) {
+      byLabel.set(link.label.toLowerCase(), link);
+    }
+  }
+  for (const part of content.split(pattern)) {
+    const link = byLabel.get(part.toLowerCase());
+    if (!link) {
+      element.append(document.createTextNode(part));
+      continue;
+    }
+    const anchor = document.createElement("a");
+    anchor.href = link.url;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    anchor.textContent = part;
+    element.append(anchor);
+  }
+}
+
+function addMessage(role, content, extraClass = "", resources = []) {
   const element = document.createElement("div");
   element.className = `message ${role} ${extraClass}`;
-  element.textContent = content;
+  appendLinkedText(element, content, resources);
   messagesElement.appendChild(element);
   messagesElement.scrollTop = messagesElement.scrollHeight;
   return element;
@@ -179,7 +218,7 @@ async function submitMessage(rawContent) {
     if (!response.ok) throw new Error(body.detail || "Request failed");
     thinking.remove();
     messages.push({ role: "assistant", content: body.message });
-    addMessage("assistant", body.message);
+    addMessage("assistant", body.message, "", body.resources || []);
     renderResources(body.resources);
     profile = body.profile || profile;
     selectedOccupation = body.selected_occupation || selectedOccupation;
