@@ -273,6 +273,7 @@ function renderResources(resources = []) {
   const appendProviderDetails = (group, provider) => {
     const details = document.createElement("details");
     details.className = "provider-details";
+    details.open = true;
     const summary = document.createElement("summary");
     summary.textContent = "Benefits, contact and approved programs";
     details.appendChild(summary);
