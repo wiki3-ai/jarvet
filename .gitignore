@@ -23,6 +23,8 @@ dist/
 .jupyterlab.pid
 .jarvet.log
 .jarvet.pid
+.cloudflared.log
+.cloudflared.pid
 .cache/
 
 # Downloaded O*NET graph database

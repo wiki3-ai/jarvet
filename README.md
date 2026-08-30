@@ -69,8 +69,9 @@ to `.env`, configure the host LLM, then start the service:
 ```
 
 The browser never receives the LLM key. For Cloudflare Tunnel, route `jarvet.ai`
-to `http://localhost:8000` inside the container or network namespace where
-`cloudflared` runs.
+to `http://localhost:8000`. Add the remotely managed tunnel token to `.env` as
+`TUNNEL_TOKEN`; the devcontainer starts `cloudflared` automatically alongside
+Jarvet. Tunnel credentials and logs remain outside Git.
 
 Jarvet uses the configured OpenAI-compatible model as a tool-calling agent. The
 model decides when to search O*NET, inspect one occupation, resolve a named area
