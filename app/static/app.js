@@ -73,8 +73,8 @@ const missionOpeners = {
   "Help me figure out what to study.": {
     message: "We can work backward from a career goal, compare occupations using O*NET evidence, and then find matching degree or certificate programs by location. You do not need to know the school first.\n\nChoose an example below, or tell me where you live and what kind of work interests you.",
     suggestions: [
-      "Marketing programs in California",
-      "Nursing programs in Texas",
+      "Marketing programs in San Jose",
+      "Nursing programs in Oakland",
       "Welding certificates near me",
       "Help me explore careers first",
     ],

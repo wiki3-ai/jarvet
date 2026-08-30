@@ -144,6 +144,7 @@ class JarvetTools:
         self.matches: list[dict[str, Any]] = []
         self.resources: list[dict[str, Any]] = []
         self.resolved_location: dict[str, Any] | None = None
+        self.training_facilities: list[dict[str, Any]] = []
 
     def _add_resource(self, resource: dict[str, Any]) -> None:
         if resource.get("url") and all(
@@ -215,6 +216,16 @@ class JarvetTools:
                         "inline_labels": [program["school"]],
                         "kind": "program-details" if program_url else "source-listing",
                     })
+                    va_facility = self.va.match_school(program["school"])
+                    if va_facility:
+                        program["va_facility"] = va_facility
+                        self.training_facilities.append(va_facility)
+                        self._add_resource({
+                            "label": f"View {program['school']} in the VA Comparison Tool",
+                            "url": va_facility["detail_url"],
+                            "inline_labels": [program["school"]],
+                            "kind": "provider-details",
+                        })
             return {
                 "occupation": self.selected or {"code": occupation["code"], "title": occupation["title"]},
                 "location": location["label"],
@@ -224,7 +235,9 @@ class JarvetTools:
                     "Results are for this exact occupation only. A verified_official_program_page "
                     "links to institution program details; source_listing_only links back to the "
                     "exact My Next Move results page and must not be described as a direct program "
-                    "page. Recent awards are context, not quality rankings."
+                    "page. A va_facility is an exact-name approved-school match from the VA GI Bill "
+                    "Comparison Tool and includes its official detail URL and benefit facts. Recent "
+                    "awards are context, not quality rankings."
                 ),
             }
 
@@ -235,6 +248,15 @@ class JarvetTools:
             self.resolved_location = location
             provider_type = str(arguments.get("provider_type", ""))
             keywords = [str(item) for item in arguments.get("keywords", []) if str(item).strip()]
+            if provider_type == "school" and self.training_facilities:
+                return {
+                    "location": location["label"],
+                    "provider_type": provider_type,
+                    "keywords": keywords,
+                    "facilities": self.training_facilities,
+                    "source": "VA GI Bill Comparison Tool",
+                    "note": "These are exact-name VA facility matches for the schools in the local training results. No unrelated nearby school was substituted.",
+                }
             if provider_type == "employer" and not keywords:
                 return {"error": "Employer searches require occupation-relevant keywords."}
             radius = max(5.0, min(float(arguments.get("radius_miles", 50)), 500.0))
@@ -307,6 +329,7 @@ Operating principles:
 - For OJT/employer searches, use specific occupation-relevant keywords. Do not present arbitrary nearby approved employers as relevant. A keyword name match is still only a lead to verify in the official VA tool.
 - Every recommended VA facility must have its official facility-detail resource attached. For a follow-up asking for a provider's link, call get_va_facility instead of returning only a general VA page.
 - Local training results may include a verified program_url from the institution's official website. Distinguish it from school_url and source_url. Recommend program details using program_url when present; never describe an institution homepage as program details.
+- Local training results may also include a va_facility matched to that exact school. Present its official VA Comparison Tool resource alongside the program resource. Do not substitute an unrelated nearby VA-approved school when exact program-school VA matches are available.
 - Respect each training result's link_status. Say a result has direct program details only for verified_official_program_page. Describe source_listing_only as the My Next Move source listing, never as a direct program page.
 - When naming specific programs or providers in the final answer, mention only results that have an attached resource. Keep the shortlist focused rather than listing unlinked results returned by a tool.
 - My Next Move/IPEDS results are school programs, not employer OJT. VA employer facilities are approved providers, but their names alone do not prove a particular trade program.

@@ -251,7 +251,8 @@ class VaComparison:
         return {
             "facility_code": row["facility_code"],
             "detail_url": (
-                "https://www.va.gov/education/gi-bill-comparison-tool/institution/"
+                "https://www.va.gov/education/gi-bill-comparison-tool/"
+                "schools-and-employers/institution/"
                 + row["facility_code"]
             ),
             "institution": row["institution"],
