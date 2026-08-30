@@ -24,7 +24,7 @@ index = OnetGraph(ROOT / ".cache" / "onet-store")
 va_index = VaComparison(ROOT / ".cache" / "va-comparison.sqlite")
 response_cache = ResponseCache(
     ROOT / ".cache" / "chat-responses.sqlite",
-    version=os.getenv("JARVET_CACHE_VERSION", "1"),
+    version=os.getenv("JARVET_CACHE_VERSION", "4"),
     max_entries=int(os.getenv("JARVET_CACHE_MAX_ENTRIES", "500")),
     ttl_seconds=int(os.getenv("JARVET_CACHE_TTL_SECONDS", "604800")),
 )
@@ -152,6 +152,7 @@ def clean_profile(raw: Any, fallback: dict[str, list[str]]) -> dict[str, list[st
 
 
 def clean_message(content: str) -> str:
+    content = re.sub(r"(?is)\n\s*suggestions\s*:\s*\[.*\]\s*$", "", content)
     content = re.sub(
         r"(?im)^\s*(?:Program details|Program info|School website|Official Resources?):\s*"
         r"https?://\S+\s*$",
@@ -326,6 +327,13 @@ async def chat(request: ChatRequest, response: Response):
     turn["suggestions"] = complete_suggestions(
         turn["suggestions"], turn["message"], turn["profile"],
     )
+    location_candidates = result.get("location_candidates") or []
+    if location_candidates:
+        turn["profile"]["location"] = list(profile.get("location", []))
+        turn["suggestions"] = [
+            {"label": candidate, "value": candidate}
+            for candidate in location_candidates
+        ]
     location = result.get("resolved_location")
     if location:
         normalized_label = re.sub(r"[^a-z0-9]+", " ", location["label"].lower()).strip()

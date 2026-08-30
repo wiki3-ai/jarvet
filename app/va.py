@@ -207,6 +207,26 @@ class VaComparison:
             "representative_zip": zip_code,
         }
 
+    def location_candidates(self, text: str, limit: int = 6) -> list[str]:
+        if self.resolve_location(text) is not None:
+            return []
+        normalized = f" {_normalized(text)} "
+        matching_cities = {
+            city.lower(): city
+            for city, _, normalized_city in self.cities
+            if f" {normalized_city} " in normalized
+        }
+        if not matching_cities:
+            return []
+        city = max(matching_cities.values(), key=len)
+        rows = self._database().execute(
+            "SELECT city, state, COUNT(*) AS uses FROM facilities "
+            "WHERE city = ? COLLATE NOCASE GROUP BY city, state "
+            "ORDER BY uses DESC, state LIMIT ?",
+            (city, limit),
+        )
+        return [f"{row['city'].title()}, {row['state']}" for row in rows]
+
     def search_nearby(
         self, latitude: float, longitude: float, keywords: list[str], *,
         employer: bool | None = None, limit: int = 8, max_miles: float = 100,

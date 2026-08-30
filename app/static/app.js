@@ -182,13 +182,51 @@ function renderResources(resources = []) {
   if (!resources.length) return;
   const list = document.createElement("div");
   list.className = "resource-list";
+  const groups = new Map();
+  const standalone = [];
   for (const resource of resources) {
+    if (!resource.group) {
+      standalone.push(resource);
+      continue;
+    }
+    if (!groups.has(resource.group)) groups.set(resource.group, []);
+    groups.get(resource.group).push(resource);
+  }
+
+  const appendLink = (parent, resource) => {
     const link = document.createElement("a");
     link.href = resource.url;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    link.innerHTML = `<span>${resource.label}</span><span aria-hidden="true">↗</span>`;
-    list.appendChild(link);
+    link.title = resource.label;
+    link.innerHTML = `<span>${resource.action || resource.label}</span><span aria-hidden="true">↗</span>`;
+    parent.appendChild(link);
+  };
+
+  for (const [name, groupedResources] of groups) {
+    const group = document.createElement("section");
+    group.className = "resource-group";
+    const title = document.createElement("h3");
+    title.textContent = name;
+    group.appendChild(title);
+    const actions = document.createElement("div");
+    actions.className = "resource-actions";
+    for (const resource of groupedResources) appendLink(actions, resource);
+    group.appendChild(actions);
+    list.appendChild(group);
+  }
+
+  if (standalone.length) {
+    const official = document.createElement("section");
+    official.className = "resource-group official-resources";
+    const title = document.createElement("h3");
+    title.textContent = groups.size ? "Official resources" : "Resources";
+    official.appendChild(title);
+    const actions = document.createElement("div");
+    actions.className = "resource-actions";
+    for (const resource of standalone) appendLink(actions, resource);
+    official.appendChild(actions);
+    list.appendChild(official);
   }
   messagesElement.appendChild(list);
   messagesElement.scrollTop = messagesElement.scrollHeight;

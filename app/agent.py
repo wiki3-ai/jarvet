@@ -144,6 +144,7 @@ class JarvetTools:
         self.matches: list[dict[str, Any]] = []
         self.resources: list[dict[str, Any]] = []
         self.resolved_location: dict[str, Any] | None = None
+        self.location_candidates: list[str] = []
         self.training_facilities: list[dict[str, Any]] = []
 
     def _add_resource(self, resource: dict[str, Any]) -> None:
@@ -152,6 +153,15 @@ class JarvetTools:
             for item in self.resources
         ):
             self.resources.append(resource)
+
+    def _location_error(self, location: str) -> dict[str, Any]:
+        self.location_candidates = self.va.location_candidates(location)
+        if self.location_candidates:
+            return {
+                "error": "Location is ambiguous. Ask the user to choose one candidate.",
+                "candidates": self.location_candidates,
+            }
+        return {"error": "Location could not be resolved. Ask for a city and state or ZIP."}
 
     async def call(self, name: str, arguments: dict[str, Any]) -> Any:
         if name == "search_occupations":
@@ -179,9 +189,10 @@ class JarvetTools:
             ]
 
         if name == "resolve_location":
-            location = self.va.resolve_location(str(arguments.get("location", "")))
+            location_text = str(arguments.get("location", ""))
+            location = self.va.resolve_location(location_text)
             if location is None:
-                return {"error": "Location could not be resolved. Ask for a city and state or ZIP."}
+                return self._location_error(location_text)
             self.resolved_location = location
             return location
 
@@ -189,9 +200,10 @@ class JarvetTools:
             occupation = self.onet.result_by_code(str(arguments.get("occupation_code", "")))
             if occupation is None:
                 return {"error": "Unknown O*NET-SOC code."}
-            location = self.va.resolve_location(str(arguments.get("location", "")))
+            location_text = str(arguments.get("location", ""))
+            location = self.va.resolve_location(location_text)
             if location is None:
-                return {"error": "Location could not be resolved. Ask for a city and state or ZIP."}
+                return self._location_error(location_text)
             self.resolved_location = location
             programs = await self.fetch_training(occupation["code"], location["representative_zip"])
             source_url = (
@@ -215,16 +227,41 @@ class JarvetTools:
                         "url": program_url or source_url,
                         "inline_labels": [program["school"]],
                         "kind": "program-details" if program_url else "source-listing",
+                        "group": program["school"],
+                        "action": "Program details" if program_url else "My Next Move listing",
                     })
+                    school_url = program.get("url")
+                    if school_url and school_url != program_url:
+                        self._add_resource({
+                            "label": f"Visit the {program['school']} website",
+                            "url": school_url,
+                            "kind": "school-website",
+                            "group": program["school"],
+                            "action": "School website",
+                        })
                     va_facility = self.va.match_school(program["school"])
                     if va_facility:
                         program["va_facility"] = va_facility
                         self.training_facilities.append(va_facility)
+                        if not school_url and va_facility.get("website"):
+                            school_url = str(va_facility["website"])
+                            if not school_url.startswith(("http://", "https://")):
+                                school_url = "https://" + school_url.lstrip("/")
+                            if school_url != program_url:
+                                self._add_resource({
+                                    "label": f"Visit the {program['school']} website",
+                                    "url": school_url,
+                                    "kind": "school-website",
+                                    "group": program["school"],
+                                    "action": "School website",
+                                })
                         self._add_resource({
                             "label": f"View {program['school']} in the VA Comparison Tool",
                             "url": va_facility["detail_url"],
                             "inline_labels": [program["school"]],
                             "kind": "provider-details",
+                            "group": program["school"],
+                            "action": "VA benefits",
                         })
             return {
                 "occupation": self.selected or {"code": occupation["code"], "title": occupation["title"]},
@@ -242,9 +279,10 @@ class JarvetTools:
             }
 
         if name == "find_va_facilities":
-            location = self.va.resolve_location(str(arguments.get("location", "")))
+            location_text = str(arguments.get("location", ""))
+            location = self.va.resolve_location(location_text)
             if location is None:
-                return {"error": "Location could not be resolved. Ask for a city and state or ZIP."}
+                return self._location_error(location_text)
             self.resolved_location = location
             provider_type = str(arguments.get("provider_type", ""))
             keywords = [str(item) for item in arguments.get("keywords", []) if str(item).strip()]
@@ -272,6 +310,8 @@ class JarvetTools:
                     "url": facility["detail_url"],
                     "inline_labels": [facility["institution"]],
                     "kind": "provider-details",
+                    "group": facility["institution"].title(),
+                    "action": "VA benefits",
                 })
             return {
                 "location": location["label"],
@@ -292,6 +332,8 @@ class JarvetTools:
                 "url": facility["detail_url"],
                 "inline_labels": [facility["institution"]],
                 "kind": "provider-details",
+                "group": facility["institution"].title(),
+                "action": "VA benefits",
             })
             return {
                 "facility": facility,
@@ -325,6 +367,7 @@ Operating principles:
 - Preserve the current selected occupation unless the user clearly changes career goals. If they do, search and then call get_occupation for the best supported match.
 - Treat spelling errors and conversational wording intelligently. Search by concrete work tasks when a title is unclear.
 - Accept city/state, region, or ZIP. "Near me" means the known profile location. Never interpret pronouns as state abbreviations and never demand a ZIP when a named area is known.
+- When a location tool returns ambiguity candidates, ask the user to choose and mention only those candidates. Do not guess a state or save a candidate to the profile before the user chooses.
 - When local results are empty, broaden geography for the SAME occupation: try a larger radius or explain the exact-source gap. Never switch occupations or interests merely to produce a result. Call get_related_occupations only if the user explicitly asks for alternatives or agrees to broaden occupationally.
 - For OJT/employer searches, use specific occupation-relevant keywords. Do not present arbitrary nearby approved employers as relevant. A keyword name match is still only a lead to verify in the official VA tool.
 - Every recommended VA facility must have its official facility-detail resource attached. For a follow-up asking for a provider's link, call get_va_facility instead of returning only a general VA page.
@@ -337,6 +380,7 @@ Operating principles:
 - Ask at most one question, only when a missing fact blocks useful action. Otherwise use the tools and answer.
 - Always return 3 or 4 concise suggestions that help the user take the next step. When asking a question, make each suggestion a plausible direct answer to that question. Otherwise offer distinct, relevant follow-up actions. Never return an empty suggestions array.
 - Keep the response concise and candid about source limitations. The frontend renders content as literal text: do not use Markdown syntax, numbered formatting, asterisks, headings, or raw URLs. Official links called through get_official_resources appear separately as buttons.
+- Institution links are rendered together below your message. A school website, verified program page, and VA benefits page are different destinations. Do not write empty link placeholders such as "Direct program page:" or repeat raw link labels in the message. State which details are available, then let the grouped actions provide access.
 - Do not offer actions Jarvet cannot perform, such as contacting providers. Suggest a concrete next search or verification step instead.
 
 Current profile:
@@ -374,6 +418,7 @@ Preserve valid profile facts, update direct user corrections, and do not infer s
                     "resources": tools.resources,
                     "selected_occupation": tools.selected,
                     "resolved_location": tools.resolved_location,
+                    "location_candidates": tools.location_candidates,
                 }
             for tool_call in tool_calls:
                 function = tool_call.get("function", {})
@@ -406,4 +451,5 @@ Preserve valid profile facts, update direct user corrections, and do not infer s
             "resources": tools.resources,
             "selected_occupation": tools.selected,
             "resolved_location": tools.resolved_location,
+            "location_candidates": tools.location_candidates,
         }

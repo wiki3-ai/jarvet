@@ -74,12 +74,16 @@ main { min-height: 100dvh; position: relative; }
 .starting-group:nth-child(2) { border-color: var(--accent); }
 .starting-group:nth-child(3) { border-color: var(--leaf); }
 .starting-group h2 { margin: 0 0 8px; color: var(--muted); font: 600 11px "IBM Plex Sans"; letter-spacing: 1px; text-transform: uppercase; }
-.starting-group button, .resource-list a { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-bottom: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; text-decoration: none; font: 500 13px/1.35 "IBM Plex Sans"; cursor: pointer; }
+.starting-group button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-bottom: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; text-decoration: none; font: 500 13px/1.35 "IBM Plex Sans"; cursor: pointer; }
 .starting-group button { min-height: 48px; padding: 8px 4px; }
 .starting-group button:hover { color: var(--accent); padding-left: 8px; }
-.resource-list { width: min(100%, 540px); display: grid; gap: 7px; margin: -12px 0 24px; }
-.resource-list a { min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
-.resource-list a:hover { border-color: var(--accent); color: var(--accent); }
+.resource-list { width: min(100%, 620px); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: -12px 0 24px; }
+.resource-group { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.resource-group h3 { margin: 0 0 9px; font-size: 13px; line-height: 1.3; }
+.resource-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.resource-actions a { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink); background: #fffdf7; text-align: left; text-decoration: none; font: 600 11px/1.25 "IBM Plex Sans"; }
+.resource-actions a:hover { border-color: var(--accent); color: var(--accent); }
+.official-resources { grid-column: 1 / -1; }
 .suggestions { grid-row: 4; padding: 0 0 10px; }
 .suggestions:empty { display: none; }
 .suggestions button { padding: 9px 12px; }
@@ -108,6 +112,8 @@ textarea { resize: none; border: 0; outline: 0; padding: 10px; color: var(--ink)
   .mission { min-height: 156px; }
   .chat { padding: 0 14px; }
   .message { max-width: 88%; }
+  .resource-list { grid-template-columns: 1fr; }
+  .official-resources { grid-column: auto; }
 }
 
 .message.assistant a {
