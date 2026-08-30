@@ -16,6 +16,10 @@
       "onAutoForward": "openBrowser"
     }
   },
+  "containerEnv": {
+    "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+    "LLM_MODEL": "openai/gpt-4.1-mini"
+  },
   "customizations": {
     "vscode": {
       "extensions": [
