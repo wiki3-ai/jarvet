@@ -59,6 +59,14 @@ not a personalized payment quote. Actual payments depend on the veteran's
 eligibility, benefit chapter and tier, rate of pursuit, training modality, and
 applicable dates.
 
+Provider cards supplement the workbook with the public VA institution API's
+school certifying official, current comparison fields, and complete approved
+IHL, non-college-degree, OJT, or apprenticeship inventories. Raw API responses
+are cached by facility code in `.cache/va-comparison.sqlite` for seven days;
+stale data is used if VA is temporarily unavailable. Program lists are filtered
+against the current career and study direction and summarized in the card, with
+the full official VA list linked separately.
+
 ## Web application
 
 Jarvet runs at `http://localhost:8000` in the devcontainer. Copy `.env.example`
@@ -107,6 +115,11 @@ My Next Move/IPEDS identifies occupation-related school programs; the VA index
 separately verifies approved facilities and supplies benefit comparison facts.
 Nearby approved employer records are proximity leads, not proof that an employer
 offers training for the selected O*NET occupation.
+
+Users can bookmark a school or employer from its provider card. Saved providers
+use the existing opt-in browser direction memory and are sent to the agent as
+soft comparison context; they do not restrict later answers or searches unless
+the user explicitly asks to search only those providers.
 
 Successful chat turns are cached in `.cache/chat-responses.sqlite`. To preheat a
 demo, walk through the intended paths once; repeating the same choices will reuse

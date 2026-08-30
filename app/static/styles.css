@@ -87,10 +87,27 @@ main { min-height: 100dvh; position: relative; }
 .starting-group button:hover { color: var(--accent); padding-left: 8px; }
 .resource-list { width: min(100%, 620px); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: -12px 0 24px; }
 .resource-group { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.resource-heading { min-height: 28px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .resource-group h3 { margin: 0 0 9px; font-size: 13px; line-height: 1.3; }
+.save-provider { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); background: #fffdf7; font: 600 10px "IBM Plex Sans"; cursor: pointer; }
+.save-provider:hover, .save-provider.saved { border-color: var(--accent); color: var(--accent); }
 .resource-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .resource-actions a { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink); background: #fffdf7; text-align: left; text-decoration: none; font: 600 11px/1.25 "IBM Plex Sans"; }
 .resource-actions a:hover { border-color: var(--accent); color: var(--accent); }
+.provider-details { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.provider-details summary { color: var(--accent); font: 600 11px/1.35 "IBM Plex Sans"; cursor: pointer; }
+.provider-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 12px 0; }
+.provider-facts div { min-width: 0; padding: 7px; background: #fffdf7; border-left: 2px solid var(--leaf); }
+.provider-facts dt { color: var(--muted); font-size: 9px; text-transform: uppercase; }
+.provider-facts dd { margin: 2px 0 0; font-size: 12px; font-weight: 600; }
+.provider-contact { display: flex; flex-direction: column; gap: 2px; margin: 11px 0; font-size: 11px; line-height: 1.35; }
+.provider-contact span { color: var(--muted); }
+.program-summary { margin-top: 11px; }
+.program-summary h4 { margin: 0 0 5px; font-size: 11px; }
+.program-summary ul { margin: 0; padding-left: 17px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.program-summary p { margin: 5px 0; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.program-summary a { display: inline-block; margin-top: 5px; color: var(--accent); font-size: 10px; font-weight: 600; text-decoration: none; }
+.saved-provider-item { border-color: var(--accent); }
 .official-resources { grid-column: 1 / -1; }
 .suggestions { grid-row: 4; padding: 0 0 10px; }
 .suggestions:empty { display: none; }

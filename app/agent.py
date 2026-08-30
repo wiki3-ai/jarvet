@@ -135,6 +135,7 @@ class JarvetTools:
     def __init__(
         self, onet: OnetGraph, va: VaComparison, fetch_training: TrainingFetcher,
         official_resources: dict[str, dict[str, str]], selected: dict[str, str] | None,
+        provider_context: str,
     ) -> None:
         self.onet = onet
         self.va = va
@@ -146,6 +147,7 @@ class JarvetTools:
         self.resolved_location: dict[str, Any] | None = None
         self.location_candidates: list[str] = []
         self.training_facilities: list[dict[str, Any]] = []
+        self.provider_context = provider_context
 
     def _add_resource(self, resource: dict[str, Any]) -> None:
         if resource.get("url") and all(
@@ -153,6 +155,22 @@ class JarvetTools:
             for item in self.resources
         ):
             self.resources.append(resource)
+
+    async def _add_provider_resource(
+        self, facility: dict[str, Any], group: str | None = None,
+    ) -> None:
+        details = await self.va.provider_details(
+            str(facility["facility_code"]), self.provider_context,
+        )
+        self._add_resource({
+            "label": f"View {facility['institution']} in the VA Comparison Tool",
+            "url": facility["detail_url"],
+            "inline_labels": [facility["institution"]],
+            "kind": "provider-details",
+            "group": group or str(facility["institution"]).title(),
+            "action": "VA benefits",
+            "provider": {**facility, **(details or {})},
+        })
 
     def _location_error(self, location: str) -> dict[str, Any]:
         self.location_candidates = self.va.location_candidates(location)
@@ -255,14 +273,7 @@ class JarvetTools:
                                     "group": program["school"],
                                     "action": "School website",
                                 })
-                        self._add_resource({
-                            "label": f"View {program['school']} in the VA Comparison Tool",
-                            "url": va_facility["detail_url"],
-                            "inline_labels": [program["school"]],
-                            "kind": "provider-details",
-                            "group": program["school"],
-                            "action": "VA benefits",
-                        })
+                        await self._add_provider_resource(va_facility, program["school"])
             return {
                 "occupation": self.selected or {"code": occupation["code"], "title": occupation["title"]},
                 "location": location["label"],
@@ -305,14 +316,7 @@ class JarvetTools:
             )
             self._add_resource(self.official_resources["compare"])
             for facility in facilities[:4]:
-                self._add_resource({
-                    "label": f"View {facility['institution']} in the VA Comparison Tool",
-                    "url": facility["detail_url"],
-                    "inline_labels": [facility["institution"]],
-                    "kind": "provider-details",
-                    "group": facility["institution"].title(),
-                    "action": "VA benefits",
-                })
+                await self._add_provider_resource(facility)
             return {
                 "location": location["label"],
                 "provider_type": provider_type,
@@ -327,14 +331,7 @@ class JarvetTools:
             facility = self.va.find_facility(str(arguments.get("query", "")))
             if facility is None:
                 return {"error": "No approved VA facility matched that name or code."}
-            self._add_resource({
-                "label": f"View {facility['institution']} in the VA Comparison Tool",
-                "url": facility["detail_url"],
-                "inline_labels": [facility["institution"]],
-                "kind": "provider-details",
-                "group": facility["institution"].title(),
-                "action": "VA benefits",
-            })
+            await self._add_provider_resource(facility)
             return {
                 "facility": facility,
                 "source": "VA GI Bill Comparison Tool",
@@ -355,11 +352,19 @@ class JarvetTools:
 
 async def run_agent(
     *, messages: list[dict[str, str]], profile: dict[str, list[str]],
-    selected_occupation: dict[str, str] | None, onet: OnetGraph, va: VaComparison,
+    selected_occupation: dict[str, str] | None, saved_providers: list[dict[str, str]],
+    onet: OnetGraph, va: VaComparison,
     fetch_training: TrainingFetcher, official_resources: dict[str, dict[str, str]],
     base_url: str, api_key: str, model: str,
 ) -> dict[str, Any]:
-    tools = JarvetTools(onet, va, fetch_training, official_resources, selected_occupation)
+    provider_context = " ".join([
+        messages[-1]["content"] if messages else "",
+        selected_occupation.get("title", "") if selected_occupation else "",
+        *(value for values in profile.values() for value in values),
+    ])
+    tools = JarvetTools(
+        onet, va, fetch_training, official_resources, selected_occupation, provider_context,
+    )
     system = f"""You are Jarvet, an agentic education and career facilitator for veterans. Solve the user's actual problem by deciding which tools to call, inspecting their results, and adapting your next step. Do not follow a fixed questionnaire.
 
 Operating principles:
@@ -388,6 +393,12 @@ Current profile:
 
 Current selected occupation:
 {json.dumps(selected_occupation)}
+
+Saved providers:
+{json.dumps(saved_providers)}
+
+Saved providers are soft context. Use them when relevant for comparison or follow-up, but never
+limit a search or answer to saved providers unless the user explicitly asks you to do so.
 
 Return the final answer as one JSON object only:
 {{"message":"plain text","suggestions":[{{"label":"short direct answer or next action","value":"complete message sent when chosen"}}],"profile":{{"interests":[],"strengths":[],"goals":[],"preferences":[],"constraints":[],"education":[],"location":[],"notes":[]}}}}

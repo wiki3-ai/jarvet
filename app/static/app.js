@@ -15,6 +15,7 @@ const directionStorageKey = "jarvet.direction.v1";
 let messages = [];
 let profile = {};
 let selectedOccupation = null;
+let savedProviders = [];
 
 function loadRememberedDirection() {
   try {
@@ -22,6 +23,7 @@ function loadRememberedDirection() {
     if (!remembered || remembered.remember !== true) return;
     profile = remembered.profile || {};
     selectedOccupation = remembered.selectedOccupation || null;
+    savedProviders = Array.isArray(remembered.savedProviders) ? remembered.savedProviders : [];
     rememberDirection.checked = true;
   } catch {
     localStorage.removeItem(directionStorageKey);
@@ -34,6 +36,7 @@ function persistDirection() {
     remember: true,
     profile,
     selectedOccupation,
+    savedProviders,
   }));
 }
 
@@ -231,16 +234,147 @@ function renderResources(resources = []) {
     parent.appendChild(link);
   };
 
+  const formatMoney = value => Number.isFinite(Number(value))
+    ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value)
+    : null;
+
+  const providerIsSaved = provider => savedProviders.some(
+    saved => saved.facility_code === provider.facility_code
+  );
+
+  const updateSaveButtons = () => {
+    for (const button of document.querySelectorAll(".save-provider")) {
+      const saved = savedProviders.some(provider => provider.facility_code === button.dataset.facilityCode);
+      button.classList.toggle("saved", saved);
+      button.setAttribute("aria-pressed", String(saved));
+      button.title = saved ? "Remove from saved providers" : "Save provider to memory";
+      button.innerHTML = `<span aria-hidden="true">${saved ? "★" : "☆"}</span><span>${saved ? "Saved" : "Save"}</span>`;
+    }
+  };
+
+  const toggleProvider = provider => {
+    if (providerIsSaved(provider)) {
+      savedProviders = savedProviders.filter(saved => saved.facility_code !== provider.facility_code);
+    } else {
+      savedProviders.push({
+        facility_code: provider.facility_code,
+        institution: provider.institution,
+        city: provider.city || "",
+        state: provider.state || "",
+        detail_url: provider.detail_url || "",
+      });
+      rememberDirection.checked = true;
+    }
+    persistDirection();
+    renderProfile();
+    updateSaveButtons();
+  };
+
+  const appendProviderDetails = (group, provider) => {
+    const details = document.createElement("details");
+    details.className = "provider-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "Benefits, contact and approved programs";
+    details.appendChild(summary);
+
+    const facts = document.createElement("dl");
+    facts.className = "provider-facts";
+    const factValues = [
+      ["Housing estimate", formatMoney(provider.estimated_housing_allowance), "/ month"],
+      ["GI Bill students", provider.gi_bill_students, ""],
+      ["In-state tuition", formatMoney(provider.tuition_in_state), "/ year"],
+      ["Yellow Ribbon", provider.yellow_ribbon ? "Participates" : "Not listed", ""],
+    ];
+    for (const [label, value, suffix] of factValues) {
+      if (value === null || value === undefined || value === "") continue;
+      const wrapper = document.createElement("div");
+      const term = document.createElement("dt");
+      const description = document.createElement("dd");
+      term.textContent = label;
+      description.textContent = `${value}${suffix}`;
+      wrapper.append(term, description);
+      facts.appendChild(wrapper);
+    }
+    details.appendChild(facts);
+
+    if (provider.contact?.name) {
+      const contact = document.createElement("p");
+      contact.className = "provider-contact";
+      const contactLabel = document.createElement("strong");
+      const contactValue = document.createElement("span");
+      contactLabel.textContent = "School certifying official";
+      contactValue.textContent = `${provider.contact.name}${provider.contact.title ? ` · ${provider.contact.title}` : ""}`;
+      contact.append(contactLabel, contactValue);
+      details.appendChild(contact);
+    }
+
+    for (const summaryData of provider.program_summaries || []) {
+      const programSection = document.createElement("section");
+      programSection.className = "program-summary";
+      const heading = document.createElement("h4");
+      heading.textContent = `${summaryData.label} (${summaryData.total})`;
+      programSection.appendChild(heading);
+      if (summaryData.programs?.length) {
+        const programs = document.createElement("ul");
+        for (const program of summaryData.programs) {
+          const item = document.createElement("li");
+          item.textContent = program;
+          programs.appendChild(item);
+        }
+        programSection.appendChild(programs);
+        if (summaryData.matching > summaryData.programs.length) {
+          const more = document.createElement("p");
+          more.textContent = `${summaryData.matching - summaryData.programs.length} more relevant approved programs`;
+          programSection.appendChild(more);
+        }
+      } else if (summaryData.total) {
+        const empty = document.createElement("p");
+        empty.textContent = "No close match to the current direction. Browse the full approved list.";
+        programSection.appendChild(empty);
+      }
+      const typePaths = {
+        IHL: "institution-of-higher-learning",
+        NCD: "non-college-degree",
+        OJT: "on-the-job-training-apprenticeship",
+        APP: "on-the-job-training-apprenticeship",
+      };
+      const typePath = typePaths[summaryData.type];
+      if (typePath && provider.detail_url) {
+        const link = document.createElement("a");
+        link.href = `${provider.detail_url}/${typePath}`;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "Browse full VA list ↗";
+        programSection.appendChild(link);
+      }
+      details.appendChild(programSection);
+    }
+    group.appendChild(details);
+  };
+
   for (const [name, groupedResources] of groups) {
     const group = document.createElement("section");
     group.className = "resource-group";
+    const provider = groupedResources.find(resource => resource.provider)?.provider;
+    const heading = document.createElement("div");
+    heading.className = "resource-heading";
     const title = document.createElement("h3");
     title.textContent = name;
-    group.appendChild(title);
+    heading.appendChild(title);
+    if (provider?.facility_code) {
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.className = "save-provider";
+      saveButton.dataset.facilityCode = provider.facility_code;
+      saveButton.addEventListener("click", () => toggleProvider(provider));
+      heading.appendChild(saveButton);
+    }
+    group.appendChild(heading);
     const actions = document.createElement("div");
     actions.className = "resource-actions";
     for (const resource of groupedResources) appendLink(actions, resource);
     group.appendChild(actions);
+    if (provider) appendProviderDetails(group, provider);
     list.appendChild(group);
   }
 
@@ -257,6 +391,7 @@ function renderResources(resources = []) {
     list.appendChild(official);
   }
   messagesElement.appendChild(list);
+  updateSaveButtons();
   messagesElement.scrollTop = messagesElement.scrollHeight;
 }
 
@@ -274,6 +409,24 @@ function renderProfile() {
       persistDirection();
     });
     profileItems.appendChild(occupation);
+  }
+  for (const provider of savedProviders) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "profile-item saved-provider-item";
+    item.title = `Remove ${provider.institution} from saved providers`;
+    item.textContent = `Saved: ${provider.institution}`;
+    item.addEventListener("click", () => {
+      savedProviders = savedProviders.filter(saved => saved.facility_code !== provider.facility_code);
+      renderProfile();
+      persistDirection();
+      for (const button of document.querySelectorAll(`.save-provider[data-facility-code="${provider.facility_code}"]`)) {
+        button.classList.remove("saved");
+        button.setAttribute("aria-pressed", "false");
+        button.innerHTML = '<span aria-hidden="true">☆</span><span>Save</span>';
+      }
+    });
+    profileItems.appendChild(item);
   }
   for (const [field, values] of Object.entries(profile)) {
     for (const value of values) {
@@ -352,6 +505,7 @@ rememberDirection.addEventListener("change", () => {
 resetDirection.addEventListener("click", () => {
   profile = {};
   selectedOccupation = null;
+  savedProviders = [];
   renderProfile();
   if (rememberDirection.checked) persistDirection();
   else clearRememberedDirection();
@@ -382,7 +536,12 @@ async function submitMessage(rawContent) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, profile, selected_occupation: selectedOccupation }),
+      body: JSON.stringify({
+        messages,
+        profile,
+        selected_occupation: selectedOccupation,
+        saved_providers: savedProviders,
+      }),
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || "Request failed");

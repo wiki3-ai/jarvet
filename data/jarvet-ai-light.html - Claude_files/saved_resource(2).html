@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<!-- saved from url=(0012)about:srcdoc -->
+<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <script>
+      (function() {
+        // Capture host references before any artifact code runs: Window.parent
+        // is [Replaceable] (a top-level `var parent` in artifact code would
+        // replace the accessor with a data property), and a top-level
+        // `const crypto` would shadow the global — either would otherwise
+        // silently break the bridge for artifacts that worked before.
+        const realParent = window.parent;
+        const cryptoObj = window.crypto;
+        // html-to-image is only used by takeScreenshot: fetched on first use, not as a
+        // parser-blocking tag. Native fetch, captured before the proxy override below.
+        const realFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+        const HTML_TO_IMAGE_SRC = "https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.13/html-to-image.min.js";
+        const HTML_TO_IMAGE_INTEGRITY = "sha512-iZ2ORl595Wx6miw+GuadDet4WQbdSWS3JLMoNfY8cRGoEFy6oT3G9IbcrBeL6AfkgpA51ETt/faX6yLV+/gFJg==";
+        let htmlToImageLoad = null;
+        const loadHtmlToImage = () => {
+          if (!htmlToImageLoad) {
+            htmlToImageLoad = (realFetch
+              ? realFetch(HTML_TO_IMAGE_SRC, { integrity: HTML_TO_IMAGE_INTEGRITY, credentials: 'omit', referrerPolicy: 'no-referrer' })
+              : Promise.reject(new Error('fetch unavailable'))
+            )
+              .then((res) => {
+                if (!res.ok) throw new Error('html-to-image failed to load (' + res.status + ')');
+                return res.text();
+              })
+              .then((source) => {
+                // UMD bundle: hide the artifact's AMD/CommonJS globals so it takes the
+                // window-global branch; inline script text runs synchronously on insert.
+                const hidden = ['define', 'module', 'exports'].map((k) => {
+                  const entry = { k, own: Object.prototype.hasOwnProperty.call(window, k), v: window[k] };
+                  try { window[k] = undefined; } catch (e) {}
+                  return entry;
+                });
+                try {
+                  const el = document.createElement('script');
+                  el.text = source;
+                  (document.head || document.documentElement).appendChild(el);
+                } finally {
+                  hidden.forEach(({ k, own, v }) => {
+                    try { if (own) { window[k] = v; } else { delete window[k]; } } catch (e) {}
+                  });
+                }
+                if (!window.htmlToImage) throw new Error('html-to-image unavailable after load');
+                return window.htmlToImage;
+              });
+            // A failed load may be transient; let the next screenshot retry.
+            htmlToImageLoad.catch(() => { htmlToImageLoad = null; });
+          }
+          return htmlToImageLoad;
+        };
+        // crypto.randomUUID exists only in Secure Contexts; fall back to a
+        // unique non-crypto id elsewhere (http://LAN-IP dev flows) —
+        // uniqueness is what the bridge needs, unpredictability is
+        // defense-in-depth on top of the source guards.
+        const newRequestId =
+          cryptoObj && typeof cryptoObj.randomUUID === "function"
+            ? function () { return cryptoObj.randomUUID(); }
+            : function () { return Date.now() + "-" + Math.random(); };
+        const originalConsole = window.console;
+        window.console = {
+          log: (...args) => {
+            originalConsole.log(...args);
+            realParent.postMessage({ type: 'console', message: args.join(' ') }, '*');
+          },
+          error: (...args) => {
+            originalConsole.error(...args);
+            realParent.postMessage({ type: 'console', message: 'Error: ' + args.join(' ') }, '*');
+          },
+          warn: (...args) => {
+            originalConsole.warn(...args);
+            realParent.postMessage({ type: 'console', message: 'Warning: ' + args.join(' ') }, '*');
+          }
+        };
+
+        // Bridge request ids are crypto-random (not sequential) so they
+        // cannot be predicted by other frames in the tab.
+        let callbacksMap = new Map();
+        let streamControllers = new Map();
+        
+        window.claude = {
+          complete: (prompt) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'claudeComplete', id, prompt }, '*');
+            });
+          }
+        };
+
+        window.storage = {
+          get: (key, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageGet', id, key, shared }, '*');
+            });
+          },
+          set: (key, value, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageSet', id, key, value, shared }, '*');
+            });
+          },
+          delete: (key, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageDelete', id, key, shared }, '*');
+            });
+          },
+          list: (prefix, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageList', id, prefix, shared }, '*');
+            });
+          }
+        };
+
+        let pendingBlobs = new Map();
+        URL.createObjectURL = (blob) => {
+          // Store the blob and create an ID and URL for it
+          const blobId = `blob-${Date.now()}-${Math.random()}`;
+          pendingBlobs.set(blobId, blob);
+          return `blob-request://${blobId}`;
+        };
+
+        URL.revokeObjectURL = (url) => {
+          // Remove the blob from our store
+          const blobId = url.replace("blob-request://", "");
+          pendingBlobs.delete(blobId);
+        };
+
+        const getBlobFromURL = (url) => {
+          const blobId = url.replace("blob-request://", "");
+          return pendingBlobs.get(blobId);
+        };
+
+        // Override global fetch with streaming support
+        window.fetch = (url, init = {}) => {
+          return new Promise((resolve, reject) => {
+            const id = newRequestId();
+            const channelId = `fetch-${id}-${Date.now()}`;
+            
+            callbacksMap.set(id, { 
+              resolve: (response) => {
+                // Null-body statuses: Response(stream, {status: 204}) throws
+                // per the Fetch spec, which would escape this resolver and
+                // hang the artifact's await forever.
+                if (response.status === 204 || response.status === 205 || response.status === 304) {
+                  try {
+                    resolve(new Response(null, {
+                      status: response.status,
+                      statusText: response.statusText,
+                      headers: response.headers
+                    }));
+                  } catch (err) {
+                    // Invalid statusText/header bytes can throw here too.
+                    reject(new TypeError(
+                      'Bridge fetch: unconstructable response (status ' + response.status + ')'
+                    ));
+                  }
+                  return;
+                }
+                // Create a ReadableStream for the response body
+                const stream = new ReadableStream({
+                  start(controller) {
+                    streamControllers.set(channelId, controller);
+                  },
+                  cancel() {
+                    streamControllers.delete(channelId);
+                  }
+                });
+                
+                // Create and return the Response with the stream. Response()
+                // requires status in [200, 599]; an opaque/no-cors fetch
+                // forwards status 0, which would throw here and escape the
+                // resolver, hanging the artifact's await. Surface it as a
+                // network-error-shaped rejection instead.
+                try {
+                  resolve(new Response(stream, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers
+                  }));
+                } catch (err) {
+                  streamControllers.delete(channelId);
+                  reject(new TypeError(
+                    'Bridge fetch: unconstructable response (status ' + response.status + ')'
+                  ));
+                }
+              },
+              reject,
+              channelId
+            });
+            
+            realParent.postMessage({
+              type: 'proxyFetch',
+              id,
+              url,
+              init,
+              channelId
+            }, '*');
+          });
+        };
+
+        window.addEventListener('message', async (event) => {
+          // Only the embedding parent may drive the bridge — sibling and
+          // nested frames can also postMessage into this window.
+          if (event.source !== realParent) return;
+          if (event.data.type === 'takeScreenshot') {
+            // Echo the request's nonce so the requester can correlate the
+            // reply to ITS request — a reply without the expected nonce
+            // (e.g. from a stale pre-remount artifact) is ignored upstream.
+            const screenshotNonce = event.data.nonce;
+            const rootElement = document.getElementById('artifacts-component-root-html');
+            if (!rootElement) {
+              realParent.postMessage({
+                type: 'screenshotError',
+                nonce: screenshotNonce,
+                error: new Error('Root element not found'),
+              }, '*');
+              return;
+            }
+            // Catch CDN load failures and toPng errors so the parent always
+            // gets a response instead of hanging forever.
+            try {
+              const htmlToImage = await loadHtmlToImage();
+              const screenshot = await htmlToImage.toPng(rootElement, {
+                imagePlaceholder:
+                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAA1JREFUGFdjePDgwX8ACOQDoNsk0PMAAAAASUVORK5CYII=",
+              });
+              realParent.postMessage({
+                type: 'screenshotData',
+                nonce: screenshotNonce,
+                data: screenshot,
+              }, '*');
+            } catch (err) {
+              realParent.postMessage({
+                type: 'screenshotError',
+                nonce: screenshotNonce,
+                error: err instanceof Error ? err : new Error(String(err)),
+              }, '*');
+            }
+          } else if (event.data.type === 'claudeComplete') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.completion);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'proxyFetchResponse') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+              callbacksMap.delete(event.data.id);
+            } else {
+              // Initial response with headers, status, etc.
+              callback.resolve({
+                status: event.data.status,
+                statusText: event.data.statusText,
+                headers: event.data.headers
+              });
+              // Don't delete the callback yet if streaming
+              if (!event.data.body) {
+                callbacksMap.delete(event.data.id);
+              }
+            }
+          } else if (event.data.type === 'proxyFetchStream') {
+            // Handle streaming data chunks
+            const controller = streamControllers.get(event.data.channelId);
+            if (controller) {
+              if (event.data.error) {
+                controller.error(new Error(event.data.error));
+                streamControllers.delete(event.data.channelId);
+              } else if (event.data.done) {
+                controller.close();
+                streamControllers.delete(event.data.channelId);
+                // Clean up the callback
+                const callback = Array.from(callbacksMap.entries()).find(
+                  ([_, value]) => value.channelId === event.data.channelId
+                );
+                if (callback) {
+                  callbacksMap.delete(callback[0]);
+                }
+              } else if (event.data.chunk) {
+                controller.enqueue(new Uint8Array(event.data.chunk));
+              }
+            }
+          } else if (event.data.type === 'storageGet') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageSet') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageDelete') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageList') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          }
+        });
+
+        window.addEventListener('click', (event) => {
+          const isEl = event.target instanceof HTMLElement;
+          if (!isEl) return;
+    
+          // find ancestor links
+          const linkEl = event.target.closest("a");
+          if (!linkEl || !linkEl.href) return;
+    
+          event.preventDefault();
+          event.stopImmediatePropagation();
+    
+          if (linkEl.href.startsWith("blob-request:")) {
+            const blob = getBlobFromURL(linkEl.href);
+            if (!blob) return;
+            void blob.arrayBuffer().then((data) => {
+              realParent.postMessage({
+                type: "downloadFile",
+                filename: linkEl.download,
+                data,
+                mimeType: blob.type || "application/octet-stream",
+              });
+            });
+          } else if (linkEl.href.startsWith("data:")) {
+            const [header, base64Data] = linkEl.href.split(",");
+            const mimeMatch = header.match(/data:([^;]+)/);
+            const mimeType = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+            const binaryString = atob(base64Data);
+            const data = Uint8Array.from(binaryString, (c) =>
+              c.charCodeAt(0),
+            ).buffer;
+            realParent.postMessage({
+              type: "downloadFile",
+              filename: linkEl.download,
+              data,
+              mimeType,
+            });
+          } else {
+            let linkUrl;
+            try {
+              linkUrl = new URL(linkEl.href);
+            } catch (error) {
+              return;
+            }
+    
+            if (linkUrl.hostname === window.location.hostname) return;
+      
+            realParent.postMessage({
+              type: 'openExternal',
+              href: linkEl.href,
+            }, '*');
+          }
+      });
+
+        const originalOpen = window.open;
+        window.open = function (url) {
+          realParent.postMessage({
+            type: "openExternal",
+            href: url,
+          }, "*");
+        };
+
+        window.addEventListener('error', (event) => {
+          realParent.postMessage({ type: 'console', message: 'Uncaught Error: ' + event.message }, '*');
+        });
+      })();
+    </script>
+  
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVET.AI — There's Always An Option</title>
+<link rel="preconnect" href="https://fonts.googleapis.com/">
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Stencil:wght@700;800&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EDE6D6;
+    --bg-panel:#E3DBC5;
+    --bg-panel-2:#DCD3B8;
+    --card:#F4EEDE;
+    --line:#6b6142;
+    --line-dim:#c9bd98;
+    --ink:#23281c;
+    --brass:#8a6d1f;
+    --brass-soft:#f0e2ba;
+    --oxide:#7a2e1c;
+    --oxide-soft:#f2ddd3;
+    --muted:#6f6a57;
+    --tan:#87794f;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'IBM Plex Sans',sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  .stencil{font-family:'Big Shoulders Stencil',sans-serif;font-weight:800;text-transform:uppercase;}
+
+  .topo{
+    position:fixed;inset:0;z-index:0;pointer-events:none;opacity:0.35;
+    background-image:
+      repeating-radial-gradient(circle at 15% 20%, transparent 0, transparent 46px, var(--line-dim) 47px, transparent 48px),
+      repeating-radial-gradient(circle at 85% 75%, transparent 0, transparent 60px, var(--line-dim) 61px, transparent 62px);
+  }
+
+  header{
+    position:relative;z-index:2;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:18px 24px;border-bottom:2px solid var(--ink);
+  }
+  .brand{display:flex;align-items:center;gap:10px;}
+  .brand .mark{
+    width:34px;height:34px;border:2px solid var(--ink);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--ink);font-size:16px;font-weight:700;
+    transform:rotate(45deg);background:var(--card);
+  }
+  .brand .mark span{transform:rotate(-45deg);}
+  .brand-name{font-size:1.1rem;letter-spacing:0.12em;color:var(--ink);}
+  .brand-name b{color:var(--brass);}
+  .status{
+    font-size:0.7rem;color:var(--muted);letter-spacing:0.08em;
+    display:flex;align-items:center;gap:8px;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--brass);animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
+
+  .hero{
+    position:relative;z-index:2;
+    padding:56px 24px 20px;text-align:center;
+    max-width:820px;margin:0 auto;
+  }
+  .eyebrow{
+    font-size:0.72rem;letter-spacing:0.18em;color:var(--muted);margin-bottom:18px;
+    display:inline-block;padding:5px 12px;border:1px solid var(--line);
+  }
+  h1.stencil{
+    font-size:clamp(2.5rem, 8.5vw, 5rem);
+    letter-spacing:0.03em;line-height:0.95;margin:0 0 10px;color:var(--ink);
+  }
+  h1.stencil b{color:var(--brass);}
+  .subtag{
+    font-size:1.15rem;color:var(--ink);font-weight:600;max-width:600px;margin:0 auto 16px;line-height:1.5;
+  }
+  .body-copy{color:var(--muted);font-size:0.95rem;max-width:620px;margin:0 auto;line-height:1.65;text-align:left;}
+  .body-copy p{margin:0 0 14px;}
+
+  /* DEAD END DIAGRAM — signature element */
+  .deadend{
+    max-width:900px;margin:44px auto 8px;padding:0 24px;position:relative;z-index:2;
+  }
+  .deadend-label{
+    font-size:0.72rem;letter-spacing:0.14em;color:var(--muted);text-align:center;margin-bottom:14px;
+  }
+  .barrier{
+    max-width:520px;margin:0 auto 6px;
+    border:2px dashed var(--oxide);color:var(--oxide);
+    background:var(--oxide-soft);
+    padding:14px 18px;text-align:center;transform:rotate(-0.6deg);
+  }
+  .barrier .stamp{
+    font-family:'Big Shoulders Stencil';font-weight:800;letter-spacing:0.1em;font-size:1.2rem;
+  }
+  .barrier .detail{
+    font-size:0.78rem;color:var(--oxide);opacity:0.85;margin-top:4px;font-family:'IBM Plex Mono';
+  }
+  .trail-down{width:2px;height:26px;background:var(--line);margin:0 auto;}
+  .doors{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0;
+    max-width:900px;margin:0 auto;position:relative;
+  }
+  .doors::before{
+    content:"";position:absolute;top:0;left:8%;right:8%;height:2px;background:var(--line);
+  }
+  .door{
+    position:relative;padding:22px 14px 4px;text-align:center;
+  }
+  .door::before{
+    content:"";position:absolute;top:0;left:50%;width:2px;height:22px;background:var(--line);
+  }
+  .door .door-icon{font-size:0.7rem;color:var(--brass);letter-spacing:0.1em;margin-bottom:6px;}
+  .door h4{margin:0 0 6px;font-size:0.92rem;color:var(--ink);}
+  .door p{margin:0;font-size:0.8rem;color:var(--muted);line-height:1.5;}
+
+  .grid-label{
+    max-width:1100px;margin:52px auto 16px;padding:0 24px;
+    font-size:0.75rem;letter-spacing:0.14em;color:var(--muted);
+    display:flex;align-items:center;gap:12px;
+  }
+  .grid-label::after{content:"";flex:1;height:1px;background:var(--line-dim);}
+
+  .demo-callout{
+    display:block;max-width:640px;margin:8px auto 0;padding:16px 20px;
+    background:var(--brass-soft);border:1.5px dashed var(--brass);
+    font-family:'IBM Plex Sans';color:var(--ink);text-align:left;cursor:pointer;
+    transition:transform .15s ease, box-shadow .15s ease;
+  }
+  .demo-callout:hover, .demo-callout:focus-visible{
+    transform:translateY(-2px);box-shadow:0 8px 18px rgba(35,40,28,0.12);
+  }
+  .demo-icon{display:block;font-size:0.7rem;letter-spacing:0.12em;color:var(--brass);margin-bottom:6px;}
+  .demo-text{font-size:0.92rem;line-height:1.5;color:var(--ink);}
+  .demo-text b{color:var(--brass);}
+
+  .missions{
+    max-width:1100px;margin:0 auto;padding:0 24px 40px;
+    display:grid;grid-template-columns:repeat(auto-fit, minmax(230px,1fr));gap:16px;
+    position:relative;z-index:2;
+  }
+  .card{
+    position:relative;
+    background:var(--card);
+    border:1px solid var(--line-dim);padding:20px 18px 18px;
+    cursor:pointer;text-align:left;transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+    color:var(--ink);font-family:inherit;
+  }
+  .card::before,.card::after{
+    content:"";position:absolute;width:12px;height:12px;border-color:var(--tan);
+  }
+  .card::before{top:-1px;left:-1px;border-top:2px solid;border-left:2px solid;}
+  .card::after{bottom:-1px;right:-1px;border-bottom:2px solid;border-right:2px solid;}
+  .card:hover, .card:focus-visible{
+    transform:translateY(-3px);
+    border-color:var(--brass);
+    box-shadow:0 10px 22px rgba(35,40,28,0.12);
+  }
+  .card:hover::before,.card:hover::after,.card:focus-visible::before,.card:focus-visible::after{border-color:var(--brass);}
+  .callsign{
+    font-size:0.68rem;letter-spacing:0.16em;color:var(--brass);margin-bottom:10px;display:block;
+  }
+  .card h3{margin:0 0 8px;font-size:1.05rem;font-family:'IBM Plex Sans';font-weight:700;}
+  .card p{margin:0;font-size:0.85rem;color:var(--muted);line-height:1.5;}
+  .card .go{
+    margin-top:14px;font-size:0.72rem;color:var(--tan);letter-spacing:0.08em;
+    display:flex;align-items:center;gap:6px;
+  }
+  .card .go::after{content:"›";font-size:1rem;transition:transform .15s;}
+  .card:hover .go::after{transform:translateX(3px);}
+
+  .strip{
+    max-width:1100px;margin:8px auto 60px;padding:16px 24px;
+    display:flex;flex-wrap:wrap;gap:10px 22px;justify-content:center;
+    font-size:0.72rem;color:var(--muted);letter-spacing:0.03em;
+  }
+  .strip b{color:var(--tan);}
+
+  footer{
+    position:relative;z-index:2;border-top:2px solid var(--ink);
+    padding:22px 24px;text-align:center;color:var(--muted);font-size:0.72rem;line-height:1.6;
+  }
+  footer .ribbon{
+    height:4px;max-width:220px;margin:0 auto 14px;
+    background:repeating-linear-gradient(90deg, var(--brass) 0 18px, var(--oxide) 18px 22px, var(--line-dim) 22px 40px);
+  }
+
+  /* CHAT PANEL */
+  .overlay{
+    position:fixed;inset:0;background:rgba(35,40,28,0.35);z-index:10;
+    display:none;align-items:flex-end;justify-content:center;
+  }
+  .overlay.open{display:flex;}
+  @media(min-width:720px){.overlay{align-items:center;}}
+
+  .panel{
+    width:100%;max-width:560px;height:82vh;max-height:720px;
+    background:var(--card);border:1px solid var(--ink);
+    display:flex;flex-direction:column;
+    animation:rise .22s ease-out;
+  }
+  @media(min-width:720px){.panel{height:74vh;border-radius:2px;}}
+  @keyframes rise{from{transform:translateY(24px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+
+  .panel-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 16px;border-bottom:1px solid var(--line-dim);
+    background:var(--brass-soft);
+  }
+  .panel-head .who{display:flex;align-items:center;gap:10px;font-size:0.85rem;letter-spacing:0.04em;color:var(--ink);}
+  .panel-head .who .dot{width:7px;height:7px;border-radius:50%;background:var(--brass);}
+  .panel-head button{
+    background:transparent;border:1px solid var(--line);color:var(--muted);
+    width:30px;height:30px;cursor:pointer;font-size:0.9rem;
+  }
+  .panel-head button:hover{border-color:var(--oxide);color:var(--oxide);}
+
+  .panel-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;}
+  .msg{max-width:86%;font-size:0.88rem;line-height:1.55;padding:10px 13px;position:relative;}
+  .msg.bot{
+    align-self:flex-start;background:var(--bg-panel);border:1px solid var(--line-dim);
+    border-left:3px solid var(--brass);
+  }
+  .msg.user{
+    align-self:flex-end;background:var(--brass-soft);border:1px solid var(--brass);color:var(--ink);
+  }
+  .msg .tag{display:block;font-size:0.62rem;letter-spacing:0.1em;color:var(--muted);margin-bottom:4px;}
+  .msg ul{margin:6px 0 0;padding-left:18px;}
+  .msg li{margin-bottom:4px;}
+  .msg b{color:var(--brass);}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px;}
+  .chip{
+    font-size:0.75rem;background:var(--card);color:var(--tan);
+    border:1px solid var(--line-dim);padding:7px 11px;cursor:pointer;letter-spacing:0.02em;
+  }
+  .chip:hover{border-color:var(--brass);color:var(--brass);}
+
+  .typing{align-self:flex-start;color:var(--muted);font-size:0.78rem;padding:4px 4px;}
+  .typing span{display:inline-block;width:5px;height:5px;background:var(--brass);border-radius:50%;margin-right:3px;animation:tdot 1s infinite;}
+  .typing span:nth-child(2){animation-delay:.15s;}
+  .typing span:nth-child(3){animation-delay:.3s;}
+  @keyframes tdot{0%,60%,100%{opacity:0.2;}30%{opacity:1;}}
+
+  .panel-input{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line-dim);}
+  .panel-input input{
+    flex:1;background:#fff;border:1px solid var(--line-dim);color:var(--ink);
+    padding:11px 12px;font-family:'IBM Plex Sans';font-size:0.88rem;
+  }
+  .panel-input input:focus{outline:2px solid var(--brass);outline-offset:0;}
+  .panel-input button{
+    background:var(--brass);color:#fff;border:none;padding:0 18px;
+    font-weight:700;letter-spacing:0.04em;cursor:pointer;font-size:0.82rem;
+  }
+  .panel-input button:hover{background:#71590f;}
+
+  @media (prefers-reduced-motion: reduce){*{animation:none !important;transition:none !important;}}
+  a{color:var(--brass);}
+  @media(max-width:640px){
+    .doors::before{display:none;}
+    .door::before{display:none;}
+  }
+</style>
+</head>
+<body id="artifacts-component-root-html">
+<div class="topo"></div>
+
+<header>
+  <div class="brand">
+    <div class="mark"><span>J</span></div>
+    <div class="brand-name mono">JARVET<b>.AI</b></div>
+  </div>
+  <div class="status mono"><span class="dot"></span> PROOF OF CONCEPT</div>
+</header>
+
+<section class="hero">
+  <span class="eyebrow mono">EDUCATION — PROOF OF CONCEPT</span>
+  <h1 class="stencil">JARVET<b>.AI</b></h1>
+  <p class="subtag">There's always an option — even when it feels like there aren't any.</p>
+</section>
+
+<button type="button" class="demo-callout" id="demoCallout">
+  <span class="demo-icon mono">▶ TRY IT LIVE</span>
+  <span class="demo-text">Tap <b>'Figure out what to study,'</b> type in a state and a major, and watch it return real program matches.</span>
+</button>
+
+<div class="grid-label mono">SELECT AN ENTRY POINT</div>
+<div class="missions" id="missions"><button class="card" type="button"><span class="callsign mono">CALLSIGN: ALPHA</span>
+    <h3>Help me get started</h3><p>Answer a few questions, get your fastest path.</p><span class="go mono">OPEN CHANNEL</span></button><button class="card" type="button"><span class="callsign mono">CALLSIGN: BRAVO</span>
+    <h3>Get paid to go to school</h3><p>GI Bill, Yellow Ribbon, VR&amp;E, and appeals.</p><span class="go mono">OPEN CHANNEL</span></button><button class="card" type="button"><span class="callsign mono">CALLSIGN: CHARLIE</span>
+    <h3>Earn a paycheck while you train</h3><p>Apprenticeships and OJT, by state or nationwide.</p><span class="go mono">OPEN CHANNEL</span></button><button class="card" type="button"><span class="callsign mono">CALLSIGN: DELTA</span>
+    <h3 style="color:#e0201a">Figure out what to study</h3><p>Search every degree program by state and field.</p><span class="go mono">OPEN CHANNEL</span></button><button class="card" type="button"><span class="callsign mono">CALLSIGN: ECHO</span>
+    <h3>I want an A+ certification</h3><p>Training, funding, and the reimbursable exam fee.</p><span class="go mono">OPEN CHANNEL</span></button><button class="card" type="button"><span class="callsign mono">CALLSIGN: FOXTROT</span>
+    <h3>Pay for my family's education</h3><p>Transfer benefits, Fry, Chapter 35, state waivers.</p><span class="go mono">OPEN CHANNEL</span></button></div>
+
+<footer>
+  <div class="ribbon"></div>
+  PROOF OF CONCEPT — not an official VA benefits determination.
+</footer>
+
+<div class="overlay" id="overlay">
+  <div class="panel">
+    <div class="panel-head">
+      <div class="who mono"><span class="dot"></span> JARVET.AI — <span id="panel-title">BRAVO — FUNDED TRAINING</span></div>
+      <button id="closeBtn" aria-label="Close chat">✕</button>
+    </div>
+    <div class="panel-body" id="panelBody"><div class="msg bot"><span class="tag">JARVET.AI</span>Here's how school gets paid for:
+      <ul>
+        <li><b>Post-9/11 GI Bill</b> — tuition paid directly to the school, plus a monthly housing allowance and a yearly book stipend.</li>
+        <li><b>Yellow Ribbon Program</b> — covers the gap when tuition runs higher than the GI Bill cap, common at private or out-of-state schools.</li>
+        <li><b>VR&amp;E (Chapter 31)</b> — for a service-connected disability rating, can fund training plus a monthly subsistence allowance.</li>
+        <li><b>Think your GI Bill is gone?</b> You can file an appeal requesting your benefits be extended — a lot of vets never realize this is an option, and it's worth checking before assuming the door is closed.</li>
+      </ul></div><div class="chips"><button class="chip">How do I appeal for an extension</button><button class="chip">Do I qualify for VR&amp;E</button><button class="chip">I'm out of GI Bill months</button><button class="chip">Fill out FAFSA for me</button></div></div>
+    <div class="panel-input">
+      <input id="chatInput" type="text" placeholder="Ask Jarvet anything about your options..." autocomplete="off">
+      <button id="sendBtn">SEND</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const missions = [
+  {call:"ALPHA", title:"Help me get started", desc:"Answer a few questions, get your fastest path.", topic:"start"},
+  {call:"BRAVO", title:"Get paid to go to school", desc:"GI Bill, Yellow Ribbon, VR&E, and appeals.", topic:"paid_school"},
+  {call:"CHARLIE", title:"Earn a paycheck while you train", desc:"Apprenticeships and OJT, by state or nationwide.", topic:"ojt"},
+  {call:"DELTA", title:"Figure out what to study", desc:"Search every degree program by state and field.", topic:"finder"},
+  {call:"ECHO", title:"I want an A+ certification", desc:"Training, funding, and the reimbursable exam fee.", topic:"aplus"},
+  {call:"FOXTROT", title:"Pay for my family's education", desc:"Transfer benefits, Fry, Chapter 35, state waivers.", topic:"family"},
+];
+const missionsEl = document.getElementById('missions');
+missions.forEach(m=>{
+  const c = document.createElement('button');
+  c.className='card'; c.setAttribute('type','button');
+  const titleStyle = m.topic === 'finder' ? ' style="color:#e0201a"' : '';
+  c.innerHTML = `<span class="callsign mono">CALLSIGN: ${m.call}</span>
+    <h3${titleStyle}>${m.title}</h3><p>${m.desc}</p><span class="go mono">OPEN CHANNEL</span>`;
+  c.addEventListener('click', ()=>openChat(m.topic, m.title));
+  missionsEl.appendChild(c);
+});
+
+document.getElementById('demoCallout').addEventListener('click', ()=>{
+  openChat('finder', "Figure out what to study");
+  setTimeout(()=>{
+    chatInput.value = "all schools in California offering a marketing degree";
+    handleSend();
+  }, 1900);
+});
+
+const overlay = document.getElementById('overlay');
+const panelBody = document.getElementById('panelBody');
+const panelTitle = document.getElementById('panel-title');
+const chatInput = document.getElementById('chatInput');
+
+document.getElementById('closeBtn').addEventListener('click', ()=> overlay.classList.remove('open'));
+overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.classList.remove('open'); });
+document.getElementById('sendBtn').addEventListener('click', handleSend);
+chatInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') handleSend(); });
+
+function addMsg(role, html){
+  const d = document.createElement('div');
+  d.className = 'msg '+role;
+  d.innerHTML = html;
+  panelBody.appendChild(d);
+  panelBody.scrollTop = panelBody.scrollHeight;
+  return d;
+}
+function addChips(labels){
+  const wrap = document.createElement('div');
+  wrap.className='chips';
+  labels.forEach(l=>{
+    const b=document.createElement('button');
+    b.className='chip'; b.textContent=l;
+    b.addEventListener('click', ()=>{ chatInput.value=l; handleSend(); });
+    wrap.appendChild(b);
+  });
+  panelBody.appendChild(wrap);
+  panelBody.scrollTop = panelBody.scrollHeight;
+}
+function botTyping(cb, delay=650){
+  const t = document.createElement('div');
+  t.className='typing';
+  t.innerHTML='<span></span><span></span><span></span>';
+  panelBody.appendChild(t);
+  panelBody.scrollTop = panelBody.scrollHeight;
+  setTimeout(()=>{ t.remove(); cb(); }, delay);
+}
+
+const scripts = {
+  start: {
+    title:"INTAKE",
+    open:()=>{
+      addMsg('bot', `<span class="tag">JARVET.AI</span>Copy that. Let's find your fastest path. Quick question first — do you currently have VA education benefits (GI Bill, VR&E) that you're eligible to use?`);
+      addChips(["Yes, I have GI Bill benefits","I have a disability rating / VR&E","I thought my GI Bill was gone","Not sure what I have"]);
+    }
+  },
+  paid_school: {
+    title:"BRAVO — FUNDED TRAINING",
+    open:()=>{
+      addMsg('bot', `<span class="tag">JARVET.AI</span>Here's how school gets paid for:
+      <ul>
+        <li><b>Post-9/11 GI Bill</b> — tuition paid directly to the school, plus a monthly housing allowance and a yearly book stipend.</li>
+        <li><b>Yellow Ribbon Program</b> — covers the gap when tuition runs higher than the GI Bill cap, common at private or out-of-state schools.</li>
+        <li><b>VR&E (Chapter 31)</b> — for a service-connected disability rating, can fund training plus a monthly subsistence allowance.</li>
+        <li><b>Think your GI Bill is gone?</b> You can file an appeal requesting your benefits be extended — a lot of vets never realize this is an option, and it's worth checking before assuming the door is closed.</li>
+      </ul>`);
+      addChips(["How do I appeal for an extension","Do I qualify for VR&E","I'm out of GI Bill months","Fill out FAFSA for me"]);
+    }
+  },
+  ojt: {
+    title:"CHARLIE — EARN WHILE YOU TRAIN",
+    open:()=>{
+      addMsg('bot', `<span class="tag">JARVET.AI</span>Under GI Bill On-the-Job Training (OJT) and Apprenticeship benefits:
+      <ul>
+        <li>You work a real job, paid wages by the employer — starting at reduced entry-level pay that increases as your skills progress.</li>
+        <li>On top of wages, you draw a monthly GI Bill benefit that steps down over time as your wages rise.</li>
+        <li>No classroom, no tuition debt — you're learning on the clock.</li>
+      </ul>
+      Want to see what's actually open right now? Ask me by state, or ask nationwide.`);
+      addChips(["on the job training in Texas","apprenticeships nationwide","How much would I actually get paid","I want A+ certification"]);
+    }
+  },
+  finder: {
+    title:"DELTA — PROGRAM FINDER",
+    open:()=>{
+      addMsg('bot', `<span class="tag">JARVET.AI</span>This is the core of Jarvet — a search across every accredited degree and certificate program in the country, matched by <b>state + field of study</b>, not just school name. The official GI Bill Comparison Tool only sorts by school name, so if you don't already know the school, it's nearly useless. We built this so you don't need to.
+      <br><br>Try: <i>"all schools in California offering a marketing degree"</i>`);
+      addChips(["all schools in California offering a marketing degree","nursing programs in Texas","welding certificates near me"]);
+    }
+  },
+  aplus: {
+    title:"ECHO — A+ CERTIFICATION",
+    open:()=>{
+      addMsg('bot', `<span class="tag">JARVET.AI</span>CompTIA A+ is one of the fastest, most direct routes into IT work:
+      <ul>
+        <li><b>Training route:</b> GI Bill and VR&E can fund approved IT training and bootcamps.</li>
+        <li><b>OJT route:</b> Some employers hire entry-level IT/help-desk techs under a GI Bill apprenticeship — earning wages while you study.</li>
+        <li><b>The exam itself:</b> GI Bill benefits can reimburse the certification test fee — separate from tuition, and most vets never ask.</li>
+        <li><b>No VA benefits left?</b> WIOA, through your local American Job Center, funds short IT credentials for eligible low-income and dislocated workers.</li>
+      </ul>`);
+      addChips(["Find A+ training programs near me","Set this up as an apprenticeship instead","I don't have GI Bill left"]);
+    }
+  },
+  family: {
+    title:"FOXTROT — FAMILY EDUCATION BENEFITS",
+    open:()=>{
+      addMsg('bot', `<span class="tag">JARVET.AI</span>Your education benefit doesn't have to stop with you. Depending on your situation, here's what can cover a spouse or child:
+      <ul>
+        <li><b>Transfer of Post-9/11 GI Bill (TEB)</b> — while still serving, you can transfer some or all of your unused GI Bill months to a spouse or dependent child. This has to be requested while you're still in the military, not after separation.</li>
+        <li><b>Fry Scholarship</b> — for children and spouses of a service member who died in the line of duty, covering benefits similar to the Post-9/11 GI Bill.</li>
+        <li><b>Survivors' &amp; Dependents' Educational Assistance (Chapter 35)</b> — for dependents of a veteran who is permanently and totally disabled from a service-connected condition, or who died from one.</li>
+        <li><b>State dependent tuition waivers</b> — many states offer free or reduced tuition at public schools for children or spouses of veterans, often tied to a disability rating or state residency. Tell me your state and I'll check what applies.</li>
+      </ul>`);
+      addChips(["How do I transfer my GI Bill","Do I qualify for Chapter 35","State tuition waivers in my state","Back to start"]);
+    }
+  }
+};
+
+function openChat(topic, titleFallback){
+  panelBody.innerHTML='';
+  panelTitle.textContent = (scripts[topic] && scripts[topic].title) || titleFallback.toUpperCase();
+  overlay.classList.add('open');
+  botTyping(()=>{ (scripts[topic] || scripts.start).open(); }, 500);
+  chatInput.focus();
+}
+
+const mockCAMarketing = [
+  {school:"San Diego State University", city:"San Diego, CA", program:"B.S. Marketing", length:"4-year", note:"GI Bill + Yellow Ribbon participant"},
+  {school:"California State University, Fullerton", city:"Fullerton, CA", program:"B.A. Business Administration – Marketing Concentration", length:"4-year", note:"GI Bill approved"},
+  {school:"Santa Monica College", city:"Santa Monica, CA", program:"A.S. Marketing", length:"2-year", note:"Low-cost, GI Bill + FAFSA eligible"},
+  {school:"University of Southern California", city:"Los Angeles, CA", program:"B.S. Marketing (Marshall School of Business)", length:"4-year", note:"Yellow Ribbon covers cost above GI Bill cap"},
+  {school:"Sacramento State University", city:"Sacramento, CA", program:"B.S. Marketing", length:"4-year", note:"GI Bill approved"},
+];
+const mockTexasOJT = [
+  {employer:"Lone Star Electric Co-op", location:"Austin, TX", role:"Electrician Apprentice", type:"Registered Apprenticeship", note:"Entry wage + GI Bill supplement, wage steps up every 6 months"},
+  {employer:"TechCare IT Solutions", location:"Houston, TX", role:"Help Desk Technician", type:"On-the-Job Training", note:"Hourly wage + monthly GI Bill OJT benefit"},
+  {employer:"Gulf Coast HVAC", location:"San Antonio, TX", role:"HVAC Apprentice", type:"Registered Apprenticeship", note:"Union apprentice wage + GI Bill supplement"},
+];
+const mockNationwideOJT = [
+  {employer:"National Grid Utility Partners", location:"Multiple states", role:"Lineworker Apprentice", type:"Registered Apprenticeship", note:"Wages + GI Bill supplement, relocation-friendly"},
+  {employer:"Federal IT Support Network", location:"Remote / multiple states", role:"IT Support Technician (OJT)", type:"On-the-Job Training", note:"Fully remote-eligible roles in several regions"},
+  {employer:"Plumbers &amp; Pipefitters Regional Locals", location:"Multiple states", role:"Plumbing Apprentice", type:"Registered Apprenticeship", note:"Union wage scale + GI Bill supplement"},
+];
+
+const states = ["alabama","alaska","arizona","arkansas","california","colorado","connecticut","delaware","florida","georgia","hawaii","idaho","illinois","indiana","iowa","kansas","kentucky","louisiana","maine","maryland","massachusetts","michigan","minnesota","mississippi","missouri","montana","nebraska","nevada","new hampshire","new jersey","new mexico","new york","north carolina","north dakota","ohio","oklahoma","oregon","pennsylvania","rhode island","south carolina","south dakota","tennessee","texas","utah","vermont","virginia","washington","west virginia","wisconsin","wyoming"];
+
+function fallbackResponse(){
+  addMsg('bot', `<span class="tag">JARVET.AI</span>I don't have a scripted answer for that in this demo build yet — in the full version this routes to the live benefits + program database. Try one of the entry points below, or name a state and a field or trade.`);
+  addChips(["Help me get started","Get paid to go to school","Earn a paycheck while I train","Figure out what to study","A+ certification"]);
+}
+
+function handleSend(){
+  const val = chatInput.value.trim();
+  if(!val) return;
+  addMsg('user', val.replace(/</g,'&lt;'));
+  chatInput.value='';
+  const lower = val.toLowerCase();
+  const mentionsState = states.find(s=>lower.includes(s));
+
+  botTyping(()=>{
+    if(lower.includes('marketing') && (lower.includes('california') || lower.includes(' ca'))){
+      let rows = mockCAMarketing.map(s=>`<li><b>${s.school}</b> — ${s.city}<br>${s.program} · ${s.length} · <span style="color:var(--tan)">${s.note}</span></li>`).join('');
+      addMsg('bot', `<span class="tag">JARVET.AI · SAMPLE RESULTS</span>Found ${mockCAMarketing.length} marketing programs in California:<ul>${rows}</ul>This is demo data. In production this expands to every state and field, with GI Bill / Yellow Ribbon status flagged per school.`);
+      addChips(["Filter to 2-year programs only","Show nursing instead","Back to start"]);
+    } else if((lower.includes('on the job') || lower.includes('on-the-job') || lower.includes('apprentice')) && mentionsState === 'texas'){
+      let rows = mockTexasOJT.map(o=>`<li><b>${o.employer}</b> — ${o.location}<br>${o.role} · ${o.type} · <span style="color:var(--tan)">${o.note}</span></li>`).join('');
+      addMsg('bot', `<span class="tag">JARVET.AI · SAMPLE RESULTS</span>Found ${mockTexasOJT.length} OJT / apprenticeship openings in Texas:<ul>${rows}</ul>This is demo data. In production this searches every state, live.`);
+      addChips(["Show nationwide instead","Back to start"]);
+    } else if((lower.includes('on the job') || lower.includes('on-the-job') || lower.includes('apprentice')) && (lower.includes('nationwide') || !mentionsState)){
+      let rows = mockNationwideOJT.map(o=>`<li><b>${o.employer}</b> — ${o.location}<br>${o.role} · ${o.type} · <span style="color:var(--tan)">${o.note}</span></li>`).join('');
+      addMsg('bot', `<span class="tag">JARVET.AI · SAMPLE RESULTS</span>Here's a nationwide sample of ${mockNationwideOJT.length} OJT / apprenticeship openings:<ul>${rows}</ul>Tell me your state and I'll narrow it down.`);
+      addChips(["I'm in Texas","Back to start"]);
+    } else if(lower.includes('appeal') || lower.includes('extension')){
+      addMsg('bot', `<span class="tag">JARVET.AI</span>If you've used up your GI Bill months, you're not automatically out of options — you can submit a request to the VA asking that your benefit period be extended, especially if there were circumstances (deployment, medical, school closure) that ate into your original window. It's not guaranteed, but a lot of vets never even file because they assume the door's closed. I can walk you through what that request needs.`);
+      addChips(["Get paid to go to school","Fill out FAFSA for me","Back to start"]);
+    } else if(lower.includes('vr&e') || lower.includes('vre') || lower.includes('vocational rehab') || lower.includes('disability rating')){
+      addMsg('bot', `<span class="tag">JARVET.AI</span>VR&E (Chapter 31) is generally for veterans with a service-connected disability rating that creates an employment barrier. It can fund training plus a monthly living stipend — often on top of, not instead of, other GI Bill benefits. A VA VR&E counselor makes the actual eligibility call; I can help you figure out what to ask them.`);
+      addChips(["Get paid to go to school","Earn a paycheck while I train","Back to start"]);
+    } else if(lower.includes('fafsa') || lower.includes('low income') || lower.includes('grant') || lower.includes('pell')){
+      addMsg('bot', `<span class="tag">JARVET.AI</span>If you're out of GI Bill benefits or never had them, FAFSA is still your front door — it determines Pell Grant eligibility and unlocks most state-level grants for veterans and low-income students. Tell me your state and I'll point you to the right grant programs.`);
+      addChips(["I'm in California","I'm in Texas","I'm in Florida","Something else"]);
+    } else if(lower.includes('a+') || lower.includes('comptia')){
+      addMsg('bot', `<span class="tag">JARVET.AI</span>For A+: GI Bill and VR&E can fund the training program itself, and separately reimburse the certification exam fee. Want to earn while you learn instead? Ask me about IT apprenticeships.`);
+      addChips(["Find A+ training near me","IT apprenticeships instead"]);
+    } else if(lower.includes('transfer') && (lower.includes('gi bill') || lower.includes('benefit'))){
+      addMsg('bot', `<span class="tag">JARVET.AI</span>Transferring the Post-9/11 GI Bill to a spouse or child has to be requested while you're still on active duty or in the Selected Reserve — it generally can't be done after you've already separated. There are also service-obligation requirements tied to when you request it. I can walk you through what to check before you file.`);
+      addChips(["Do I qualify for Chapter 35","State tuition waivers in my state","Back to start"]);
+    } else if(lower.includes('chapter 35') || lower.includes('fry scholarship') || lower.includes('dea') || (lower.includes('spouse') && lower.includes('school')) || lower.includes('dependent') || lower.includes('my kids') || lower.includes('my children') || lower.includes('family')){
+      addMsg('bot', `<span class="tag">JARVET.AI</span>A few programs exist specifically for military dependents:
+      <ul>
+        <li><b>Fry Scholarship</b> — spouse or child of a service member who died in the line of duty.</li>
+        <li><b>Chapter 35 (DEA)</b> — dependents of a veteran who's permanently and totally disabled from service, or who died from a service-connected condition.</li>
+        <li><b>State tuition waivers</b> — vary a lot by state; tell me yours and I'll check.</li>
+      </ul>`);
+      addChips(["How do I transfer my GI Bill","State tuition waivers in my state","Back to start"]);
+    } else if(lower.includes('start')){
+      openChat('start','Help me get started');
+    } else {
+      fallbackResponse();
+    }
+  });
+}
+</script>
+
+
+</body></html>

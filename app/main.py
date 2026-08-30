@@ -24,7 +24,7 @@ index = OnetGraph(ROOT / ".cache" / "onet-store")
 va_index = VaComparison(ROOT / ".cache" / "va-comparison.sqlite")
 response_cache = ResponseCache(
     ROOT / ".cache" / "chat-responses.sqlite",
-    version=os.getenv("JARVET_CACHE_VERSION", "4"),
+    version=os.getenv("JARVET_CACHE_VERSION", "5"),
     max_entries=int(os.getenv("JARVET_CACHE_MAX_ENTRIES", "500")),
     ttl_seconds=int(os.getenv("JARVET_CACHE_TTL_SECONDS", "604800")),
 )
@@ -50,10 +50,19 @@ class Message(BaseModel):
     content: str
 
 
+class SavedProvider(BaseModel):
+    facility_code: str = Field(max_length=20)
+    institution: str = Field(max_length=160)
+    city: str = Field(default="", max_length=100)
+    state: str = Field(default="", max_length=10)
+    detail_url: str = Field(default="", max_length=500)
+
+
 class ChatRequest(BaseModel):
     messages: list[Message] = Field(min_length=1, max_length=30)
     profile: dict[str, list[str]] = Field(default_factory=dict)
     selected_occupation: dict[str, str] | None = None
+    saved_providers: list[SavedProvider] = Field(default_factory=list, max_length=12)
 
 
 PROFILE_FIELDS = (
@@ -295,6 +304,7 @@ async def chat(request: ChatRequest, response: Response):
         "messages": [message.model_dump() for message in request.messages],
         "profile": profile,
         "selected_occupation": request.selected_occupation,
+        "saved_providers": [provider.model_dump() for provider in request.saved_providers],
         "model": model,
     })
     cached = response_cache.get(cache_key)
@@ -309,6 +319,7 @@ async def chat(request: ChatRequest, response: Response):
             messages=[message.model_dump() for message in request.messages],
             profile=profile,
             selected_occupation=request.selected_occupation,
+            saved_providers=[provider.model_dump() for provider in request.saved_providers],
             onet=index,
             va=va_index,
             fetch_training=fetch_local_training,

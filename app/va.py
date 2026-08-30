@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 STATE_NAMES = {
     "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
@@ -20,6 +24,18 @@ STATE_NAMES = {
     "south carolina": "SC", "south dakota": "SD", "tennessee": "TN", "texas": "TX",
     "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA",
     "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+}
+
+PROGRAM_LABELS = {
+    "IHL": "Degree programs",
+    "NCD": "Certificate and non-college programs",
+    "OJT": "On-the-job training",
+    "APP": "Apprenticeships",
+}
+PROGRAM_STOP_WORDS = {
+    "about", "and", "career", "certificate", "degree", "find", "for", "from",
+    "help", "near", "program", "programs", "school", "study", "the", "training",
+    "want", "with",
 }
 
 
@@ -58,6 +74,11 @@ class VaComparison:
             raise RuntimeError("VA Comparison Tool index is missing. Run scripts/init-va-data.py.")
         self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        self.connection.execute(
+            "CREATE TABLE IF NOT EXISTS provider_details ("
+            "facility_code TEXT PRIMARY KEY, payload TEXT NOT NULL, fetched_at INTEGER NOT NULL)"
+        )
+        self.connection.commit()
         self.facility_count = self.connection.execute(
             "SELECT COUNT(*) FROM facilities"
         ).fetchone()[0]
@@ -68,6 +89,115 @@ class VaComparison:
                 "WHERE city IS NOT NULL AND state IS NOT NULL"
             )
         ]
+
+    async def provider_details(
+        self, facility_code: str, context: str = "", *, ttl_seconds: int = 7 * 24 * 60 * 60,
+    ) -> dict[str, Any] | None:
+        payload = await self._provider_payload(facility_code, ttl_seconds)
+        if payload is None:
+            return None
+        attributes = payload.get("institution", {})
+        programs = payload.get("programs", {})
+        officials = attributes.get("versioned_school_certifying_officials") or []
+        primary = next(
+            (official for official in officials if official.get("priority") == "Primary"),
+            officials[0] if officials else None,
+        )
+        contact = None
+        if primary:
+            contact = {
+                "name": " ".join(
+                    part.title() for part in (primary.get("first_name"), primary.get("last_name"))
+                    if part
+                ),
+                "title": str(primary.get("title") or "School certifying official").title(),
+            }
+        terms = {
+            term for term in _normalized(context).split()
+            if len(term) >= 3 and term not in PROGRAM_STOP_WORDS
+        }
+        summaries = []
+        for program_type in attributes.get("program_types") or programs:
+            code = str(program_type).upper()
+            items = programs.get(code, [])
+            ranked = []
+            for position, item in enumerate(items):
+                description = str(item.get("description") or "").strip()
+                words = set(_normalized(description).split())
+                score = len(words & terms)
+                if description:
+                    ranked.append((score, position, description))
+            matches = [item for item in ranked if item[0] > 0]
+            chosen = sorted(matches, key=lambda item: (-item[0], item[1]))[:6]
+            if not terms:
+                chosen = ranked[:6]
+            summaries.append({
+                "type": code,
+                "label": PROGRAM_LABELS.get(code, f"{code} programs"),
+                "total": len(ranked),
+                "matching": len(matches) if terms else len(ranked),
+                "programs": [item[2] for item in chosen],
+            })
+        return {
+            "facility_code": attributes.get("facility_code") or facility_code,
+            "contact": contact,
+            "monthly_housing_rate": _number(attributes.get("bah")),
+            "estimated_housing_allowance": _number(attributes.get("dod_bah")),
+            "tuition_in_state": _number(attributes.get("tuition_in_state")),
+            "books": _number(attributes.get("books")),
+            "gi_bill_students": attributes.get("student_count"),
+            "yellow_ribbon": bool(attributes.get("yr")),
+            "accredited": bool(attributes.get("accredited")),
+            "credit_for_military_training": bool(attributes.get("credit_for_mil_training")),
+            "program_summaries": summaries,
+            "source_updated_at": attributes.get("updated_at"),
+        }
+
+    async def _provider_payload(
+        self, facility_code: str, ttl_seconds: int,
+    ) -> dict[str, Any] | None:
+        database = self._database()
+        cached = database.execute(
+            "SELECT payload, fetched_at FROM provider_details WHERE facility_code = ?",
+            (facility_code,),
+        ).fetchone()
+        now = int(time.time())
+        if cached is not None and now - cached["fetched_at"] < ttl_seconds:
+            return json.loads(cached["payload"])
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+                response = await client.get(
+                    f"https://api.va.gov/v0/gi/institutions/{facility_code}"
+                )
+                response.raise_for_status()
+                attributes = response.json()["data"]["attributes"]
+                program_types = [
+                    str(item).upper() for item in attributes.get("program_types") or []
+                ]
+                programs: dict[str, list[dict[str, Any]]] = {}
+                for program_type in program_types:
+                    response = await client.get(
+                        "https://api.va.gov/v0/gi/institution_programs/search",
+                        params={
+                            "type": program_type,
+                            "facility_code": facility_code,
+                            "disable_pagination": "true",
+                        },
+                    )
+                    response.raise_for_status()
+                    programs[program_type] = [
+                        item.get("attributes", {}) for item in response.json().get("data", [])
+                    ]
+        except (httpx.HTTPError, KeyError, TypeError, ValueError):
+            return json.loads(cached["payload"]) if cached is not None else None
+        payload = {"institution": attributes, "programs": programs}
+        database.execute(
+            "INSERT OR REPLACE INTO provider_details (facility_code, payload, fetched_at) "
+            "VALUES (?, ?, ?)",
+            (facility_code, json.dumps(payload, separators=(",", ":")), now),
+        )
+        database.commit()
+        return payload
 
     def _database(self) -> sqlite3.Connection:
         if self.connection is None:
