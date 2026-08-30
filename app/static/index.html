@@ -14,10 +14,10 @@
   <main>
     <section id="welcome" class="welcome">
       <header class="landing-header">
-        <div class="landing-brand">
+        <a class="landing-brand" href="/" aria-label="Jarvet home">
           <span class="landing-mark" aria-hidden="true"><span>J</span></span>
           <span>JARVET<strong>.AI</strong></span>
-        </div>
+        </a>
         <div class="status"><span class="status-dot"></span>PROOF OF CONCEPT</div>
       </header>
 
@@ -62,17 +62,24 @@
 
       <footer class="landing-footer">
         <span></span>
-        PROOF OF CONCEPT — not an official VA benefits determination.
+        <p>PROOF OF CONCEPT — not an official VA benefits determination.</p>
+        <p class="onet-credit">Includes information from the <a href="https://www.onetcenter.org/database.html" target="_blank" rel="noopener noreferrer">O*NET® 31.0 Database</a> by the U.S. Department of Labor, Employment and Training Administration (USDOL/ETA). Used under the <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0 license</a>. O*NET® is a trademark of USDOL/ETA. Jarvet has modified or added to some information; USDOL/ETA has not approved, endorsed, or tested these modifications. <a href="https://www.onetcenter.org/license_db.html" target="_blank" rel="noopener noreferrer">O*NET database license</a>.</p>
       </footer>
     </section>
 
     <section id="chat" class="chat" hidden>
       <header>
-        <div class="brand"><span class="mini-mark">J</span><span>Jarvet</span></div>
-        <button id="reset" class="icon-button" title="Start over" aria-label="Start over">↺</button>
+        <a id="chat-home" class="brand" href="/" aria-label="Jarvet home"><span class="mini-mark">J</span><span>Jarvet.ai</span></a>
+        <a id="rewind-home" class="icon-button" href="/" title="Back to home" aria-label="Back to home">↺</a>
       </header>
-      <aside id="profile" class="profile" hidden>
-        <span class="profile-label">Your direction</span>
+      <aside id="profile" class="profile">
+        <div class="profile-heading">
+          <span class="profile-label">Your direction</span>
+          <div class="memory-controls">
+            <label><input id="remember-direction" type="checkbox"> Remember me in this browser</label>
+            <button id="reset-direction" type="button">Reset</button>
+          </div>
+        </div>
         <div id="profile-items" class="profile-items"></div>
       </aside>
       <div id="messages" class="messages" aria-live="polite"></div>
@@ -81,7 +88,10 @@
         <textarea id="input" rows="1" placeholder="Tell me what you need help with" aria-label="Your message" required></textarea>
         <button id="send" type="submit" aria-label="Send message">↑</button>
       </form>
-      <p class="disclaimer">Benefit guidance links to VA.gov. Jarvet does not determine eligibility.</p>
+      <footer class="chat-footer">
+        <p class="disclaimer">Benefit guidance links to VA.gov. Jarvet does not determine eligibility.</p>
+        <p class="onet-credit">Includes information from the <a href="https://www.onetcenter.org/database.html" target="_blank" rel="noopener noreferrer">O*NET® 31.0 Database</a> by USDOL/ETA, used under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>. O*NET® is a trademark of USDOL/ETA. Jarvet modifications are not approved, endorsed, or tested by USDOL/ETA. <a href="https://www.onetcenter.org/license_db.html" target="_blank" rel="noopener noreferrer">License details</a>.</p>
+      </footer>
     </section>
   </main>
   <script src="/static/app.js"></script>

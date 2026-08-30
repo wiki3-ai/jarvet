@@ -9,9 +9,37 @@ const profileItems = document.querySelector("#profile-items");
 const suggestionsElement = document.querySelector("#suggestions");
 const welcomeForm = document.querySelector("#welcome-form");
 const welcomeInput = document.querySelector("#welcome-input");
+const rememberDirection = document.querySelector("#remember-direction");
+const resetDirection = document.querySelector("#reset-direction");
+const directionStorageKey = "jarvet.direction.v1";
 let messages = [];
 let profile = {};
 let selectedOccupation = null;
+
+function loadRememberedDirection() {
+  try {
+    const remembered = JSON.parse(localStorage.getItem(directionStorageKey));
+    if (!remembered || remembered.remember !== true) return;
+    profile = remembered.profile || {};
+    selectedOccupation = remembered.selectedOccupation || null;
+    rememberDirection.checked = true;
+  } catch {
+    localStorage.removeItem(directionStorageKey);
+  }
+}
+
+function persistDirection() {
+  if (!rememberDirection.checked) return;
+  localStorage.setItem(directionStorageKey, JSON.stringify({
+    remember: true,
+    profile,
+    selectedOccupation,
+  }));
+}
+
+function clearRememberedDirection() {
+  localStorage.removeItem(directionStorageKey);
+}
 
 const startingPoints = [
   {
@@ -243,6 +271,7 @@ function renderProfile() {
     occupation.addEventListener("click", () => {
       selectedOccupation = null;
       renderProfile();
+      persistDirection();
     });
     profileItems.appendChild(occupation);
   }
@@ -259,19 +288,17 @@ function renderProfile() {
       item.addEventListener("click", () => {
         profile[field] = profile[field].filter(entry => entry !== value);
         renderProfile();
+        persistDirection();
       });
       profileItems.appendChild(item);
     }
   }
-  profileElement.hidden = profileItems.childElementCount === 0;
 }
 
 function begin(options = {}) {
   welcome.hidden = true;
   chat.hidden = false;
   messages = [];
-  profile = {};
-  selectedOccupation = null;
   messagesElement.replaceChildren();
   renderProfile();
   addMessage("assistant", options.message || "What do you need help with today? Choose a starting point or describe your situation in your own words.");
@@ -282,6 +309,17 @@ function begin(options = {}) {
   }
   renderSuggestions((options.suggestions || []).map(label => ({ label, value: label })));
   input.focus();
+}
+
+function showHome(event) {
+  event?.preventDefault();
+  chat.hidden = true;
+  welcome.hidden = false;
+  messages = [];
+  messagesElement.replaceChildren();
+  suggestionsElement.replaceChildren();
+  welcomeInput.value = "";
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function beginWithMission(content) {
@@ -305,7 +343,19 @@ welcomeForm.addEventListener("submit", event => {
 for (const mission of document.querySelectorAll(".mission")) {
   mission.addEventListener("click", () => beginWithMission(mission.dataset.message));
 }
-document.querySelector("#reset").addEventListener("click", () => begin());
+document.querySelector("#chat-home").addEventListener("click", showHome);
+document.querySelector("#rewind-home").addEventListener("click", showHome);
+rememberDirection.addEventListener("change", () => {
+  if (rememberDirection.checked) persistDirection();
+  else clearRememberedDirection();
+});
+resetDirection.addEventListener("click", () => {
+  profile = {};
+  selectedOccupation = null;
+  renderProfile();
+  if (rememberDirection.checked) persistDirection();
+  else clearRememberedDirection();
+});
 input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
@@ -343,6 +393,7 @@ async function submitMessage(rawContent) {
     profile = body.profile || profile;
     selectedOccupation = body.selected_occupation || selectedOccupation;
     renderProfile();
+    persistDirection();
     renderSuggestions(body.suggestions);
   } catch (error) {
     thinking.textContent = `I couldn't reach the guide: ${error.message}`;
@@ -357,3 +408,5 @@ form.addEventListener("submit", async event => {
   event.preventDefault();
   await submitMessage(input.value);
 });
+
+loadRememberedDirection();
