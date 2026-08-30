@@ -106,3 +106,13 @@ My Next Move/IPEDS identifies occupation-related school programs; the VA index
 separately verifies approved facilities and supplies benefit comparison facts.
 Nearby approved employer records are proximity leads, not proof that an employer
 offers training for the selected O*NET occupation.
+
+Successful chat turns are cached in `.cache/chat-responses.sqlite`. To preheat a
+demo, walk through the intended paths once; repeating the same choices will reuse
+the complete response, including profile state, suggestions, and trusted links,
+across browser refreshes and server restarts. Cache entries expire after seven
+days and the 500 least-recently-used limit is configurable with
+`JARVET_CACHE_TTL_SECONDS` and `JARVET_CACHE_MAX_ENTRIES`. Increment
+`JARVET_CACHE_VERSION` when response behavior changes and old warm entries should
+be ignored. `/api/health` reports cache entries, hits, and misses, while each chat
+response includes `X-Jarvet-Cache: HIT` or `MISS`.

@@ -9,25 +9,36 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.agent import run_agent
+from app.cache import ResponseCache
 from app.onet import OnetGraph
 from app.va import VaComparison
 
 ROOT = Path(__file__).resolve().parent.parent
 index = OnetGraph(ROOT / ".cache" / "onet-store")
 va_index = VaComparison(ROOT / ".cache" / "va-comparison.sqlite")
+response_cache = ResponseCache(
+    ROOT / ".cache" / "chat-responses.sqlite",
+    version=os.getenv("JARVET_CACHE_VERSION", "1"),
+    max_entries=int(os.getenv("JARVET_CACHE_MAX_ENTRIES", "500")),
+    ttl_seconds=int(os.getenv("JARVET_CACHE_TTL_SECONDS", "604800")),
+)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     index.load()
     va_index.load()
-    yield
+    response_cache.load()
+    try:
+        yield
+    finally:
+        response_cache.close()
 
 
 app = FastAPI(title="Jarvet", lifespan=lifespan)
@@ -269,15 +280,27 @@ def health():
         "query_engine": "Oxigraph",
         "agent": "native-tool-calling",
         "model": os.getenv("LLM_MODEL", ""),
+        "response_cache": response_cache.stats(),
     }
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, response: Response):
     profile = clean_profile(request.profile, {})
     base_url = os.getenv("LLM_BASE_URL", "http://host.docker.internal:8888/v1").rstrip("/")
     api_key = os.getenv("LLM_API_KEY", "")
     model = os.getenv("LLM_MODEL", "")
+    cache_key = response_cache.key({
+        "messages": [message.model_dump() for message in request.messages],
+        "profile": profile,
+        "selected_occupation": request.selected_occupation,
+        "model": model,
+    })
+    cached = response_cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Jarvet-Cache"] = "HIT"
+        return cached
+    response.headers["X-Jarvet-Cache"] = "MISS"
     if not api_key:
         raise HTTPException(503, "LLM_API_KEY is not configured in the container environment.")
     try:
@@ -311,9 +334,11 @@ async def chat(request: ChatRequest):
             if re.sub(r"[^a-z0-9]+", " ", value.lower()).strip() != normalized_label
         ]
         turn["profile"]["location"].append(location["label"])
-    return {
+    api_response = {
         **turn,
         "resources": result["resources"],
         "matches": result["matches"][:3],
         "selected_occupation": result["selected_occupation"],
     }
+    response_cache.put(cache_key, api_response)
+    return api_response
