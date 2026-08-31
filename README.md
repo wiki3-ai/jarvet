@@ -1,4 +1,63 @@
-# jarvet
+# Jarvet
+
+Jarvet is an agentic education and career facilitator for veterans. It pairs an
+OpenAI-compatible tool-calling language model with authoritative local data — the
+O*NET occupation graph and the VA GI Bill Comparison Tool index — so every
+factual claim in a conversation is backed by a structured source rather than
+model recall. The frontend renders only verified links: occupation facts,
+school programs, approved providers, and official VA.gov actions each carry
+their own trusted destination.
+
+> Proof of concept. Jarvet does not make eligibility decisions or produce
+> personalized benefit quotes; it surfaces official data and links for
+> verification.
+
+## Features
+
+- **Occupation exploration** — search and inspect O*NET occupations, including
+  Bright Outlook growth categories, related occupations, and work-activity
+  context, via SPARQL over an embedded Oxigraph store.
+- **Local training discovery** — exact-occupation school programs from My Next
+  Move for Veterans / IPEDS, with a bounded crawl of each institution's own site
+  to verify a real program page before promoting it.
+- **VA provider search** — approved schools and employer/OJT providers near a
+  resolved city/state or ZIP, with facility-level benefit facts, program
+  summaries (degree, non-college, OJT, apprenticeship), and official VA
+  Comparison Tool detail links.
+- **Agentic tool calling** — the model decides which tools to call; Python
+  validates arguments and returns structured facts. Geographic and occupational
+  broadening are separate, explicit actions.
+- **Direction memory** — opt-in browser-local profile, selected occupation, and
+  bookmarked providers sent to the agent as soft comparison context.
+- **Response caching** — successful chat turns are cached in SQLite for fast
+  repeat demos, with TTL, LRU limit, and version controls.
+
+## Architecture
+
+| Component | Technology |
+| --- | --- |
+| Web app & API | Python 3.12, FastAPI, Uvicorn |
+| Agent | OpenAI-compatible chat completions with native tool calling (e.g. OpenRouter) |
+| Occupation graph | O*NET 31.0 N-Triples in an embedded Oxigraph store + FTS5 search index |
+| Provider & benefit data | VA GI Bill Comparison Tool workbook in SQLite + VA institution API (7-day cache) |
+| Geography | Census 2025 ZCTA Gazetteer centroids for proximity and ZIP resolution |
+| Frontend | Vanilla HTML/CSS/JS single page |
+| Caching | SQLite response cache, VA API cache, My Next Move HTML parsing |
+| Devcontainer | Docker, Cloudflare Tunnel (`cloudflared`), JupyterLab on port 7788 |
+
+## Quick start
+
+The devcontainer provisions everything on creation: it builds a Python virtual
+environment, downloads the O*NET graph, VA workbook, and Census gazetteer,
+bulk-loads the SPARQL store, and starts Jarvet, JupyterLab, and (if configured)
+the Cloudflare Tunnel.
+
+To run manually:
+
+```bash
+cp .env.example .env   # set LLM_API_KEY (OpenRouter or any OpenAI-compatible host)
+./scripts/start-web.sh # serves http://localhost:8000
+```
 
 ## O*NET graph data
 
@@ -132,3 +191,31 @@ days and the 500 least-recently-used limit is configurable with
 `JARVET_CACHE_VERSION` when response behavior changes and old warm entries should
 be ignored. `/api/health` reports cache entries, hits, and misses, while each chat
 response includes `X-Jarvet-Cache: HIT` or `MISS`.
+
+## API endpoints
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/` | GET | Serves the single-page frontend |
+| `/api/health` | GET | Reports store counts, model, and cache statistics |
+| `/api/chat` | POST | Runs the agent for one conversation turn |
+
+## License
+
+Copyright © 2026 Jarvet contributors.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See the [LICENSE](LICENSE) file for the full text.
+
+This project uses data from sources with their own terms:
+
+- **O*NET® 31.0 Database** by the U.S. Department of Labor, Employment and
+  Training Administration (USDOL/ETA), used under the
+  [CC BY 4.0 license](https://creativecommons.org/licenses/by/4.0/). O*NET® is
+  a trademark of USDOL/ETA; Jarvet has modified or added to some information,
+  and USDOL/ETA has not approved, endorsed, or tested these modifications.
+- **VA GI Bill Comparison Tool** data and the public VA institution API,
+  U.S. Department of Veterans Affairs.
+- **U.S. Census Bureau Gazetteer** files, public domain.
