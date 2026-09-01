@@ -177,6 +177,19 @@ separately verifies approved facilities and supplies benefit comparison facts.
 Nearby approved employer records are proximity leads, not proof that an employer
 offers training for the selected O*NET occupation.
 
+Jarvet treats OJT, apprenticeships, and other paid training as one family, since
+VA publishes apprenticeships inside its OJT program data and users use the terms
+interchangeably. Employer searches match the trade against provider names
+semantically: approved employer/OJT names are embedded with the
+`BAAI/bge-small-en-v1.5` model (via fastembed, ONNX, no external API) when the
+VA index is built, and a query is embedded at search time and ranked by cosine
+similarity with a small exact-word bonus. This finds relevant sponsors whose
+names never mention the trade — "car repair training" matches "Automotive
+Apprenticeship Group" — without canned stemming rules. When nothing matches,
+the search also returns the closest approved OJT/apprenticeship sponsors
+regardless of name, and the agent is instructed to inspect their approved
+program lists before reporting that an area has no OJT options.
+
 Users can bookmark a school or employer from its provider card. Saved providers
 use the existing opt-in browser direction memory and are sent to the agent as
 soft comparison context; they do not restrict later answers or searches unless

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 
 STATE_NAMES = {
     "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
@@ -75,6 +76,8 @@ class VaComparison:
         self.connection: sqlite3.Connection | None = None
         self.facility_count = 0
         self.cities: list[tuple[str, str, str]] = []
+        self._embedder: Any = None
+        self._query_cache: dict[str, Any] = {}
 
     def load(self) -> None:
         if not self.path.exists():
@@ -390,9 +393,6 @@ class VaComparison:
         self, latitude: float, longitude: float, keywords: list[str], *,
         employer: bool | None = None, limit: int = 8, max_miles: float = 100,
     ) -> list[dict[str, Any]]:
-        terms = [_normalized(keyword) for keyword in keywords if _normalized(keyword)]
-        if not terms:
-            return []
         clauses = ["approved = 1", "latitude IS NOT NULL", "longitude IS NOT NULL"]
         if employer is True:
             clauses.append("employer_provider = 1")
@@ -401,11 +401,116 @@ class VaComparison:
         rows = self._database().execute(
             "SELECT * FROM facilities WHERE " + " AND ".join(clauses)
         )
+        query_text = " ".join(keywords)
         facilities = []
         for row in rows:
-            name = _normalized(row["institution"])
-            if not any(term in name for term in terms):
+            distance = _distance_miles(latitude, longitude, row["latitude"], row["longitude"])
+            if distance > max_miles:
                 continue
+            relevance = self._name_relevance(row["facility_code"], row["institution"], query_text)
+            if relevance is None:
+                continue
+            facilities.append((relevance, distance, self._record(row, distance)))
+        facilities.sort(key=lambda item: (-item[0], item[1]))
+        return [item[2] for item in facilities[:limit]]
+
+    RELEVANCE_THRESHOLD = 0.62
+
+    def _name_relevance(
+        self, facility_code: str, institution: str, query_text: str,
+    ) -> float | None:
+        """Semantic relevance of a provider name to the query, or None when the
+        name is clearly unrelated. Uses precomputed name embeddings plus a
+        small exact-word bonus so 'auto mechanic' prefers 'Automotive
+        Apprenticeship Group' over 'Automation Specialists'. Generic sponsor
+        names (JATCs, trust funds) score below the threshold for any specific
+        trade and are filtered out."""
+        if not query_text.strip():
+            return None
+        similarity = self._embedding_similarity(facility_code, institution, query_text)
+        if similarity is None:
+            return None
+        words = set(_normalized(institution).split())
+        query_words = set(_normalized(query_text).split())
+        overlap = len(words & query_words) / max(len(query_words), 1)
+        relevance = similarity + 0.05 * overlap
+        if relevance < self.RELEVANCE_THRESHOLD:
+            return None
+        return relevance
+
+    def _embedding_similarity(
+        self, facility_code: str, institution: str, query_text: str,
+    ) -> float | None:
+        database = self._database()
+        row = database.execute(
+            "SELECT embedding FROM employer_embeddings WHERE facility_code = ?",
+            (facility_code,),
+        ).fetchone()
+        if row is None:
+            return None
+        query = self._query_embedding(query_text)
+        if query is None:
+            return None
+        vector = np.frombuffer(row[0], dtype=np.float32)
+        norm = float(np.linalg.norm(vector)) * float(np.linalg.norm(query))
+        if norm == 0:
+            return None
+        return float(np.dot(vector, query) / norm)
+
+    def _query_embedding(self, query_text: str) -> Any:
+        cache = self._query_cache
+        if cache is not None and query_text in cache:
+            return cache[query_text]
+        model = self._embedding_model()
+        if model is None:
+            return None
+        vector = np.asarray(next(model.embed([query_text])), dtype=np.float32)
+        if cache is not None:
+            cache[query_text] = vector
+        return vector
+
+    def _embedding_model(self):
+        if self._embedder is None:
+            try:
+                from fastembed import TextEmbedding
+                self._embedder = TextEmbedding("BAAI/bge-small-en-v1.5")
+            except Exception:
+                return None
+        return self._embedder
+
+    def nearest_ojt_providers(
+        self, latitude: float, longitude: float, *, limit: int = 4,
+        max_miles: float = 500,
+    ) -> list[dict[str, Any]]:
+        """Closest approved employer/OJT providers regardless of name keywords.
+        Many OJT sponsors have generic names (trust funds, JATCs, joint
+        apprenticeship councils), so an empty keyword search does not mean no
+        OJT exists nearby."""
+        rows = self._database().execute(
+            "SELECT * FROM facilities WHERE approved = 1 AND employer_provider = 1 "
+            "AND latitude IS NOT NULL AND longitude IS NOT NULL"
+        )
+        facilities = []
+        for row in rows:
+            distance = _distance_miles(latitude, longitude, row["latitude"], row["longitude"])
+            if distance <= max_miles:
+                facilities.append(self._record(row, distance))
+        return sorted(facilities, key=lambda item: item["distance_miles"])[:limit]
+
+    def nearest_ojt_providers(
+        self, latitude: float, longitude: float, *, limit: int = 4,
+        max_miles: float = 500,
+    ) -> list[dict[str, Any]]:
+        """Closest approved employer/OJT providers regardless of name keywords.
+        Many OJT sponsors have generic names (trust funds, JATCs, joint
+        apprenticeship councils), so an empty keyword search does not mean no
+        OJT exists nearby."""
+        rows = self._database().execute(
+            "SELECT * FROM facilities WHERE approved = 1 AND employer_provider = 1 "
+            "AND latitude IS NOT NULL AND longitude IS NOT NULL"
+        )
+        facilities = []
+        for row in rows:
             distance = _distance_miles(latitude, longitude, row["latitude"], row["longitude"])
             if distance <= max_miles:
                 facilities.append(self._record(row, distance))
