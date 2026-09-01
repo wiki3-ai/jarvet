@@ -328,6 +328,19 @@ class JarvetTools:
             )
             fallback: list[dict[str, Any]] = []
             if provider_type == "employer" and not facilities:
+                # Specialized trade schools (diving academies, aviation schools)
+                # are school providers, not employers. Search schools before
+                # concluding nothing exists.
+                fallback = self.va.search_nearby(
+                    location["latitude"], location["longitude"], keywords,
+                    employer=False, limit=limit, max_miles=radius,
+                )
+                for facility in fallback:
+                    facility["fallback_note"] = (
+                        "A school provider, not an employer OJT sponsor; its "
+                        "name matched the trade semantically."
+                    )
+            if provider_type == "employer" and not fallback:
                 fallback = self.va.nearest_ojt_providers(
                     location["latitude"], location["longitude"], limit=4, max_miles=radius,
                 )
@@ -365,9 +378,10 @@ class JarvetTools:
                     "rates are not personal payment quotes. "
                     + (
                         "No provider name matched the trade, so nearest_ojt_providers lists the "
-                        "closest approved OJT/apprenticeship sponsors regardless of name. Their "
-                        "program lists may still include the user's trade; check program_summaries "
-                        "before saying nothing exists. Never report zero OJT options without "
+                        "closest approved providers of either type regardless of name. Specialized "
+                        "trade schools (for example diving academies) are school providers, not "
+                        "employers, so check their program lists too. Check program_summaries "
+                        "before saying nothing exists. Never report zero training options without "
                         "checking this list and the provider program summaries."
                         if fallback else ""
                     )
@@ -428,7 +442,7 @@ Operating principles:
 - When local results are empty, broaden geography for the SAME occupation: retry find_local_training with scope state, then nationwide, or explain the exact-source gap. Never switch occupations or interests merely to produce a result. Call get_related_occupations only if the user explicitly asks for alternatives or agrees to broaden occupationally.
 - For OJT/employer searches, describe the trade in plain words (for example automotive mechanic, car repair). Provider names are matched semantically by meaning, so sponsors with related names are found without exact word overlap. A semantic match is still only a lead to verify in the official VA tool.
 - Treat OJT, apprenticeships, and other paid training as one family: a user asking for OJT is also asking about apprenticeships, and vice versa. One find_va_facilities employer search covers both; never tell the user you have not checked apprenticeships after an OJT search, or run a second search just for them. VA lists apprenticeships inside its OJT program data and Jarvet labels each program as an apprenticeship or on-the-job training in the provider card.
-- When an employer search returns no name matches, the tool result includes nearest_ojt_providers: the closest approved OJT/apprenticeship sponsors regardless of name. Many sponsors have generic names (trust funds, JATCs, joint apprenticeship councils), so a name miss does not mean no OJT exists. Inspect each fallback provider's program_summaries for the user's trade before concluding nothing is available. Present relevant fallback providers as leads to verify, clearly saying their names did not mention the trade but their approved programs might include it. Only say an area has no OJT options after checking both the fallback list and the program summaries.
+- When an employer search returns no name matches, the tool result includes nearest_ojt_providers: the closest approved providers of either type regardless of name. Many sponsors have generic names (trust funds, JATCs, joint apprenticeship councils), and specialized trade schools such as diving academies are school providers rather than employers, so a name miss does not mean no training exists. Inspect each fallback provider's program_summaries for the user's trade before concluding nothing is available. Present relevant fallback providers as leads to verify, clearly saying their names did not mention the trade but their approved programs might include it. Only say an area has no training options after checking both the fallback list and the program summaries.
 - Every recommended VA facility must have its official facility-detail resource attached. For a follow-up asking for a provider's link, call get_va_facility instead of returning only a general VA page.
 - Local training results may include a verified program_url from the institution's official website. Distinguish it from school_url and source_url. Recommend program details using program_url when present; never describe an institution homepage as program details.
 - Local training results may also include a va_facility matched to that exact school. Present its official VA Comparison Tool resource alongside the program resource. Do not substitute an unrelated nearby VA-approved school when exact program-school VA matches are available.

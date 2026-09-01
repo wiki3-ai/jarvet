@@ -73,6 +73,7 @@ def build_database() -> None:
         f"{ZCTA_ARCHIVE.stat().st_size}:{ZCTA_ARCHIVE.stat().st_mtime_ns}"
     )
     if DATABASE.exists() and MARKER.exists() and MARKER.read_text() == marker:
+        embed_provider_names()
         print("VA Comparison Tool index is ready.")
         return
 
@@ -155,41 +156,41 @@ def build_database() -> None:
     count = connection.execute("SELECT COUNT(*) FROM facilities").fetchone()[0]
     zip_count = connection.execute("SELECT COUNT(*) FROM zcta").fetchone()[0]
     connection.close()
-    embed_employer_names()
+    embed_provider_names()
     MARKER.write_text(marker)
     print(f"Indexed {count:,} VA facilities and {zip_count:,} Census ZIP-area centroids.")
 
 
-def embed_employer_names() -> None:
-    """Precompute semantic embeddings for approved employer/OJT provider names.
+def embed_provider_names() -> None:
+    """Precompute semantic embeddings for all approved provider names.
 
     OJT sponsors often have generic names (trust funds, JATCs, joint
-    apprenticeship councils), so keyword matching alone misses relevant
-    providers. Embeddings let the agent search by trade meaning instead of
-    exact words. Vectors are stored as float32 blobs keyed by facility code.
+    apprenticeship councils), and trade schools like diving academies are
+    school providers rather than employers. Embeddings let the agent search by
+    trade meaning across both provider types. Vectors are stored as float32
+    blobs keyed by facility code.
     """
     from fastembed import TextEmbedding
     import numpy as np
 
     connection = sqlite3.connect(DATABASE)
     already = connection.execute(
-        "SELECT COUNT(*) FROM employer_embeddings"
+        "SELECT COUNT(*) FROM provider_embeddings"
     ).fetchone()[0] if connection.execute(
-        "SELECT name FROM sqlite_master WHERE name = 'employer_embeddings'"
+        "SELECT name FROM sqlite_master WHERE name = 'provider_embeddings'"
     ).fetchone() else 0
     if already:
-        print(f"Employer name embeddings already present ({already:,}).")
+        print(f"Provider name embeddings already present ({already:,}).")
         connection.close()
         return
 
-    print("Embedding employer/OJT provider names (first run downloads a ~67 MB model)...")
+    print("Embedding provider names (first run downloads a ~67 MB model)...")
     model = TextEmbedding("BAAI/bge-small-en-v1.5")
     rows = connection.execute(
-        "SELECT facility_code, institution FROM facilities "
-        "WHERE approved = 1 AND employer_provider = 1"
+        "SELECT facility_code, institution FROM facilities WHERE approved = 1"
     ).fetchall()
     connection.execute(
-        "CREATE TABLE employer_embeddings ("
+        "CREATE TABLE provider_embeddings ("
         "facility_code TEXT PRIMARY KEY, embedding BLOB NOT NULL)"
     )
     batch: list[tuple[str, list[float]]] = []
@@ -199,7 +200,7 @@ def embed_employer_names() -> None:
         batch.append((code, np.asarray(vector, dtype=np.float32).tobytes()))
         if len(batch) >= 512:
             connection.executemany(
-                "INSERT OR REPLACE INTO employer_embeddings VALUES (?, ?)", batch,
+                "INSERT OR REPLACE INTO provider_embeddings VALUES (?, ?)", batch,
             )
             connection.commit()
             total += len(batch)
@@ -207,12 +208,12 @@ def embed_employer_names() -> None:
             batch.clear()
     if batch:
         connection.executemany(
-            "INSERT OR REPLACE INTO employer_embeddings VALUES (?, ?)", batch,
+            "INSERT OR REPLACE INTO provider_embeddings VALUES (?, ?)", batch,
         )
         total += len(batch)
     connection.commit()
     connection.close()
-    print(f"Embedded {total:,} employer provider names.")
+    print(f"Embedded {total:,} provider names.")
 
 
 if __name__ == "__main__":

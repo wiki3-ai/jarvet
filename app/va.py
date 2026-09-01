@@ -443,7 +443,7 @@ class VaComparison:
     ) -> float | None:
         database = self._database()
         row = database.execute(
-            "SELECT embedding FROM employer_embeddings WHERE facility_code = ?",
+            "SELECT embedding FROM provider_embeddings WHERE facility_code = ?",
             (facility_code,),
         ).fetchone()
         if row is None:
@@ -482,31 +482,14 @@ class VaComparison:
         self, latitude: float, longitude: float, *, limit: int = 4,
         max_miles: float = 500,
     ) -> list[dict[str, Any]]:
-        """Closest approved employer/OJT providers regardless of name keywords.
-        Many OJT sponsors have generic names (trust funds, JATCs, joint
-        apprenticeship councils), so an empty keyword search does not mean no
-        OJT exists nearby."""
+        """Closest approved providers of either type regardless of name
+        keywords. Many OJT sponsors have generic names (trust funds, JATCs,
+        joint apprenticeship councils), and specialized trade schools such as
+        diving academies are school providers rather than employers, so an
+        empty employer search does not mean no training exists nearby."""
         rows = self._database().execute(
-            "SELECT * FROM facilities WHERE approved = 1 AND employer_provider = 1 "
-            "AND latitude IS NOT NULL AND longitude IS NOT NULL"
-        )
-        facilities = []
-        for row in rows:
-            distance = _distance_miles(latitude, longitude, row["latitude"], row["longitude"])
-            if distance <= max_miles:
-                facilities.append(self._record(row, distance))
-        return sorted(facilities, key=lambda item: item["distance_miles"])[:limit]
-
-    def nearest_ojt_providers(
-        self, latitude: float, longitude: float, *, limit: int = 4,
-        max_miles: float = 500,
-    ) -> list[dict[str, Any]]:
-        """Closest approved employer/OJT providers regardless of name keywords.
-        Many OJT sponsors have generic names (trust funds, JATCs, joint
-        apprenticeship councils), so an empty keyword search does not mean no
-        OJT exists nearby."""
-        rows = self._database().execute(
-            "SELECT * FROM facilities WHERE approved = 1 AND employer_provider = 1 "
+            "SELECT * FROM facilities WHERE approved = 1 "
+            "AND (employer_provider = 1 OR school_provider = 1) "
             "AND latitude IS NOT NULL AND longitude IS NOT NULL"
         )
         facilities = []
