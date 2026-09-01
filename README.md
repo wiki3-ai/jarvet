@@ -39,6 +39,7 @@ their own trusted destination.
 | Web app & API | Python 3.12, FastAPI, Uvicorn |
 | Agent | OpenAI-compatible chat completions with native tool calling (e.g. OpenRouter) |
 | Occupation graph | O*NET 31.0 N-Triples in an embedded Oxigraph store + FTS5 search index |
+| School programs | IPEDS directory + completions + O*NET CIP-to-SOC crosswalk in SQLite |
 | Provider & benefit data | VA GI Bill Comparison Tool workbook in SQLite + VA institution API (7-day cache) |
 | Geography | Census 2025 ZCTA Gazetteer centroids for proximity and ZIP resolution |
 | Frontend | Vanilla HTML/CSS/JS single page |
@@ -109,6 +110,18 @@ REFRESH_VA_DATA=1 ./scripts/init-onet-data.sh
 .venv/bin/python scripts/init-va-data.py
 ```
 
+## School program data (IPEDS)
+
+Initialization downloads the NCES IPEDS institutional directory (HD2024) and
+completions (C2024_A) files plus the official O*NET Education CIP-to-SOC
+crosswalk, and joins them into `.cache/ipeds.sqlite`: institutions with
+coordinates and websites, and program rows keyed by O*NET-SOC code with
+recent-award counts. Rebuild manually with:
+
+```bash
+.venv/bin/python scripts/init-ipeds-data.py
+```
+
 The generated source files and SQLite index are excluded from Git. The index
 contains provider identity, approval and provider type, location, the published
 monthly housing/living-allowance rate, Post-9/11 usage/payment aggregates,
@@ -158,21 +171,22 @@ Benefit, school, vocational, and on-the-job-training starting points link to
 official VA.gov guidance and the GI Bill Comparison Tool. Jarvet does not make
 eligibility decisions or treat O*NET occupation data as a school inventory.
 
-When a career and location are known, Jarvet loads nearby programs from My Next
-Move for Veterans using the occupation's O*NET-SOC code. Users may supply a city
-and state or a ZIP code. For named cities, Jarvet resolves an area center and a
-representative ZIP from its local VA and Census indexes because the My Next Move
-endpoint itself accepts only ZIP codes. Those results are based on the current
-IPEDS directory and completions data plus the CIP to O*NET-SOC crosswalk. Jarvet
-shows recent-award counts as evidence of program activity, not as a quality
-ranking. For each displayed result, Jarvet performs a bounded crawl of the
-institution's own site and verifies subject terms before promoting a program,
-degree, certificate, curriculum, or catalog page. If no official program page
-can be verified, the action is labeled as a My Next Move source listing instead
-of presenting the institution homepage as program details. Trusted program and
-provider actions are linked at their names in the response and repeated in the
-resource list below it.
-My Next Move/IPEDS identifies occupation-related school programs; the VA index
+When a career and location are known, Jarvet loads school programs from its
+local IPEDS index: the NCES institutional directory and completions files joined
+to occupations through the official O*NET Education CIP-to-SOC crosswalk, built
+by `scripts/init-ipeds-data.py`. This replaces scraping My Next Move, whose
+local-training table derives from the same sources. Searches support three
+scopes — near a city or ZIP (ranked by distance), across a state, or nationwide
+— and each result reports the total program count for the scope so the agent can
+say how many more exist beyond those shown. Jarvet shows recent-award counts as
+evidence of program activity, not as a quality ranking. For the closest few
+results, Jarvet performs a bounded crawl of the institution's own site and
+verifies subject terms before promoting a program, degree, certificate,
+curriculum, or catalog page. If no official program page can be verified, the
+action is labeled as a source listing instead of presenting the institution
+homepage as program details. Trusted program and provider actions are linked at
+their names in the response and repeated in the resource list below it.
+The IPEDS index identifies occupation-related school programs; the VA index
 separately verifies approved facilities and supplies benefit comparison facts.
 Nearby approved employer records are proximity leads, not proof that an employer
 offers training for the selected O*NET occupation.

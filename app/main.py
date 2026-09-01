@@ -16,15 +16,17 @@ from pydantic import BaseModel, Field
 
 from app.agent import run_agent
 from app.cache import HttpCache, ResponseCache
+from app.ipeds import IpedsIndex
 from app.onet import OnetGraph
 from app.va import VaComparison
 
 ROOT = Path(__file__).resolve().parent.parent
 index = OnetGraph(ROOT / ".cache" / "onet-store")
 va_index = VaComparison(ROOT / ".cache" / "va-comparison.sqlite")
+ipeds_index = IpedsIndex(ROOT / ".cache" / "ipeds.sqlite")
 response_cache = ResponseCache(
     ROOT / ".cache" / "chat-responses.sqlite",
-    version=os.getenv("JARVET_CACHE_VERSION", "9"),
+    version=os.getenv("JARVET_CACHE_VERSION", "10"),
     max_entries=int(os.getenv("JARVET_CACHE_MAX_ENTRIES", "500")),
     ttl_seconds=int(os.getenv("JARVET_CACHE_TTL_SECONDS", "604800")),
 )
@@ -35,6 +37,7 @@ http_cache = HttpCache(ROOT / ".cache" / "http-responses.sqlite")
 async def lifespan(_: FastAPI):
     index.load()
     va_index.load()
+    ipeds_index.load()
     response_cache.load()
     http_cache.load()
     try:
@@ -86,42 +89,6 @@ VA_RESOURCES = {
 }
 
 
-class TrainingTableParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.programs: list[dict[str, str]] = []
-        self.row: dict[str, str] | None = None
-        self.field = ""
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attributes = dict(attrs)
-        if tag == "tr":
-            self.row = {}
-        elif tag == "td" and self.row is not None:
-            self.field = (attributes.get("data-title") or "").lower().replace(" ", "_")
-            if self.field == "school" and attributes.get("data-text"):
-                self.row["school"] = attributes["data-text"] or ""
-            if self.field == "recent_graduates" and attributes.get("data-text"):
-                self.row["recent_graduates"] = attributes["data-text"] or ""
-        elif tag == "a" and self.row is not None and self.field == "school":
-            href = attributes.get("href") or ""
-            if href.startswith(("http://", "https://")) and "mynextmove.org" not in href:
-                self.row.setdefault("url", href)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "td":
-            self.field = ""
-        elif tag == "tr" and self.row is not None:
-            if self.row.get("program") and self.row.get("school"):
-                self.row["program"] = " ".join(self.row["program"].split())
-                self.programs.append(self.row)
-            self.row = None
-
-    def handle_data(self, data: str) -> None:
-        if self.row is not None and self.field == "program":
-            self.row["program"] = self.row.get("program", "") + data
-
-
 async def fetch_cached_page(
     client: httpx.AsyncClient, url: str,
 ) -> httpx.Response | None:
@@ -137,28 +104,6 @@ async def fetch_cached_page(
     response.raise_for_status()
     http_cache.put(url, response.content, response.headers.get("content-type", ""))
     return response
-
-
-async def fetch_local_training(code: str, zip_code: str) -> list[dict[str, str]] | None:
-    if not zip_code:
-        return []
-    url = f"https://www.mynextmove.org/vets/profile/localtraining/{code}?zip={zip_code}"
-    cached = http_cache.get(url, ttl_seconds=7 * 24 * 60 * 60)
-    if cached is not None:
-        body, _ = cached
-        parser = TrainingTableParser()
-        parser.feed(body.decode("utf-8", errors="replace"))
-        return parser.programs[:8]
-    try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-    except httpx.HTTPError:
-        return None
-    http_cache.put(url, response.content, response.headers.get("content-type", ""))
-    parser = TrainingTableParser()
-    parser.feed(response.text)
-    return parser.programs[:8]
 
 
 def clean_profile(raw: Any, fallback: dict[str, list[str]]) -> dict[str, list[str]]:
@@ -349,7 +294,7 @@ async def chat(request: ChatRequest, response: Response):
             saved_providers=[provider.model_dump() for provider in request.saved_providers],
             onet=index,
             va=va_index,
-            fetch_training=fetch_local_training,
+            ipeds=ipeds_index,
             fetch_page=fetch_cached_page,
             official_resources=VA_RESOURCES,
             base_url=base_url,

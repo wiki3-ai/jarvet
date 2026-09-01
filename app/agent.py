@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
+from app.ipeds import IpedsIndex
 from app.onet import OnetGraph
 from app.programs import discover_program_pages
 from app.va import VaComparison
@@ -72,14 +73,15 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "find_local_training",
-            "description": "Find exact-occupation school programs from My Next Move/IPEDS near a city/state or ZIP. This never changes occupations. An empty result means keep the occupation and consider a wider geographic search or OJT source.",
+            "description": "Find exact-occupation school programs from the local IPEDS index near a city/state or ZIP, across a state, or nationwide. This never changes occupations. The result includes total_programs for the scope; when it exceeds shown, tell the user how many more exist. An empty result means keep the occupation and consider a wider scope or OJT source.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "occupation_code": {"type": "string"},
-                    "location": {"type": "string", "description": "Known city/state or ZIP, not 'near me'."},
+                    "location": {"type": "string", "description": "Known city/state or ZIP, not 'near me'. Omit for nationwide."},
+                    "scope": {"type": "string", "enum": ["near", "state", "nationwide"], "description": "near ranks by distance from location; state filters to the location's state; nationwide ignores location. Default near."},
                 },
-                "required": ["occupation_code", "location"],
+                "required": ["occupation_code"],
             },
         },
     },
@@ -135,13 +137,13 @@ TOOL_SCHEMAS = [
 
 class JarvetTools:
     def __init__(
-        self, onet: OnetGraph, va: VaComparison, fetch_training: TrainingFetcher,
+        self, onet: OnetGraph, va: VaComparison, ipeds: IpedsIndex,
         official_resources: dict[str, dict[str, str]], selected: dict[str, str] | None,
         provider_context: str, fetch_page: PageFetcher | None = None,
     ) -> None:
         self.onet = onet
         self.va = va
-        self.fetch_training = fetch_training
+        self.ipeds = ipeds
         self.fetch_page = fetch_page
         self.official_resources = official_resources
         self.selected = selected
@@ -221,74 +223,81 @@ class JarvetTools:
             occupation = self.onet.result_by_code(str(arguments.get("occupation_code", "")))
             if occupation is None:
                 return {"error": "Unknown O*NET-SOC code."}
-            location_text = str(arguments.get("location", ""))
-            location = self.va.resolve_location(location_text)
-            if location is None:
-                return self._location_error(location_text)
-            self.resolved_location = location
-            programs = await self.fetch_training(occupation["code"], location["representative_zip"])
-            source_url = (
-                f"https://www.mynextmove.org/vets/profile/localtraining/{occupation['code']}"
-                f"?zip={location['representative_zip']}"
+            location_text = str(arguments.get("location", "")).strip()
+            scope = str(arguments.get("scope", "near"))
+            state = None
+            latitude: float | None = None
+            longitude: float | None = None
+            location_label = "nationwide"
+            if scope == "nationwide" or not location_text:
+                location_label = "nationwide"
+            else:
+                location = self.va.resolve_location(location_text)
+                if location is None:
+                    return self._location_error(location_text)
+                self.resolved_location = location
+                location_label = location["label"]
+                if location.get("state") and not location.get("city"):
+                    # State-level scope: no distance ranking, filter by state.
+                    state = location["state"]
+                else:
+                    latitude = location["latitude"]
+                    longitude = location["longitude"]
+            result = self.ipeds.programs_for(
+                occupation["code"], latitude=latitude, longitude=longitude,
+                state=state, limit=8,
             )
+            programs = result["programs"]
+            total = result["total"]
             if programs:
-                programs = await discover_program_pages(programs[:4], fetch=self.fetch_page)
                 self._add_resource({
-                    "label": f"Find {occupation['title']} training near {location['label']}",
-                    "url": source_url,
+                    "label": f"Find {occupation['title']} training near {location_label}",
+                    "url": (
+                        f"https://www.mynextmove.org/vets/profile/localtraining/"
+                        f"{occupation['code']}"
+                        + (f"?zip={location['representative_zip']}" if latitude is not None else "")
+                    ),
                 })
-                for program in programs[:4]:
-                    program_url = program.get("program_url")
-                    self._add_resource({
-                        "label": (
-                            f"View {program['program']} details at {program['school']}"
-                            if program_url else
-                            f"View the source listing for {program['program']} at {program['school']}"
-                        ),
-                        "url": program_url or source_url,
-                        "inline_labels": [program["school"]],
-                        "kind": "program-details" if program_url else "source-listing",
-                        "group": program["school"],
-                        "action": "Program details" if program_url else "My Next Move listing",
-                    })
-                    school_url = program.get("url")
-                    if school_url and school_url != program_url:
-                        self._add_resource({
-                            "label": f"Visit the {program['school']} website",
-                            "url": school_url,
-                            "kind": "school-website",
-                            "group": program["school"],
-                            "action": "School website",
-                        })
-                    va_facility = self.va.match_school(program["school"])
+                # Verify official program pages for the closest few, in parallel.
+                verified = await discover_program_pages(
+                    [
+                        {
+                            "school": program["institution"],
+                            "program": program["cip_title"],
+                            "url": program["website"] or "",
+                        }
+                        for program in programs[:4]
+                    ],
+                    fetch=self.fetch_page,
+                )
+                for program, discovery in zip(programs[:4], verified):
+                    program_url = (discovery or {}).get("url")
+                    if program_url:
+                        program["program_url"] = program_url
+                        program["link_status"] = "verified_official_program_page"
+                    else:
+                        program["link_status"] = "source_listing_only"
+                    va_facility = self.va.match_school(program["institution"])
                     if va_facility:
                         program["va_facility"] = va_facility
                         self.training_facilities.append(va_facility)
-                        if not school_url and va_facility.get("website"):
-                            school_url = str(va_facility["website"])
-                            if not school_url.startswith(("http://", "https://")):
-                                school_url = "https://" + school_url.lstrip("/")
-                            if school_url != program_url:
-                                self._add_resource({
-                                    "label": f"Visit the {program['school']} website",
-                                    "url": school_url,
-                                    "kind": "school-website",
-                                    "group": program["school"],
-                                    "action": "School website",
-                                })
-                        await self._add_provider_resource(va_facility, program["school"])
+                        await self._add_provider_resource(va_facility, program["institution"])
             return {
                 "occupation": self.selected or {"code": occupation["code"], "title": occupation["title"]},
-                "location": location["label"],
-                "programs": programs or [],
-                "source": "My Next Move for Veterans / IPEDS",
+                "location": location_label,
+                "programs": programs,
+                "total_programs": total,
+                "shown": len(programs),
+                "source": "IPEDS completions + O*NET CIP-to-SOC crosswalk",
                 "note": (
-                    "Results are for this exact occupation only. A verified_official_program_page "
-                    "links to institution program details; source_listing_only links back to the "
-                    "exact My Next Move results page and must not be described as a direct program "
-                    "page. A va_facility is an exact-name approved-school match from the VA GI Bill "
-                    "Comparison Tool and includes its official detail URL and benefit facts. Recent "
-                    "awards are context, not quality rankings."
+                    "Results are for this exact occupation only, ranked by proximity when a "
+                    "city or ZIP is known. total_programs is the full count for the scope; "
+                    "shown is how many are listed here, so say how many more exist when "
+                    "total_programs exceeds shown. A verified_official_program_page links to "
+                    "institution program details; source_listing_only means no official page "
+                    "was verified and the My Next Move source listing is the reference. A "
+                    "va_facility is an exact-name approved-school match from the VA GI Bill "
+                    "Comparison Tool. Recent awards are context, not quality rankings."
                 ),
             }
 
@@ -391,8 +400,8 @@ class JarvetTools:
 async def run_agent(
     *, messages: list[dict[str, str]], profile: dict[str, list[str]],
     selected_occupation: dict[str, str] | None, saved_providers: list[dict[str, str]],
-    onet: OnetGraph, va: VaComparison,
-    fetch_training: TrainingFetcher, official_resources: dict[str, dict[str, str]],
+    onet: OnetGraph, va: VaComparison, ipeds: IpedsIndex,
+    official_resources: dict[str, dict[str, str]],
     base_url: str, api_key: str, model: str,
     fetch_page: PageFetcher | None = None,
 ) -> dict[str, Any]:
@@ -402,7 +411,7 @@ async def run_agent(
         *(value for values in profile.values() for value in values),
     ])
     tools = JarvetTools(
-        onet, va, fetch_training, official_resources, selected_occupation,
+        onet, va, ipeds, official_resources, selected_occupation,
         provider_context, fetch_page,
     )
     system = f"""You are Jarvet, an agentic education and career facilitator for veterans. Solve the user's actual problem by deciding which tools to call, inspecting their results, and adapting your next step. Do not follow a fixed questionnaire.
@@ -410,10 +419,13 @@ async def run_agent(
 Operating principles:
 - Use tools for every factual claim about occupations, programs, providers, geography, VA approval, and benefits. Never invent results.
 - Preserve the current selected occupation unless the user clearly changes career goals. If they do, search and then call get_occupation for the best supported match.
+- When search_occupations returns several plausible matches, do not silently pick one. Present the top matches with one-line distinctions and let the user choose, unless one is an obviously exact match for the user's words. A user who said "fix cars" means automotive work; if the best match is not automotive, say why and offer the automotive match.
 - Treat spelling errors and conversational wording intelligently. Search by concrete work tasks when a title is unclear.
 - Accept city/state, region, or ZIP. "Near me" means the known profile location. Never interpret pronouns as state abbreviations and never demand a ZIP when a named area is known.
+- When the user names a place that is not a city or state (a region, landmark, or area such as Lake Tahoe), resolve the nearest well-known city or the containing state, say which anchor you used, and search from there. Never silently substitute a different location from the profile.
+- Honor scope requests literally. If the user asks for nationwide results or clicks a nationwide suggestion, call find_local_training with scope nationwide and report results from the whole country. Never answer a nationwide request with local results.
 - When a location tool returns ambiguity candidates, ask the user to choose and mention only those candidates. Do not guess a state or save a candidate to the profile before the user chooses.
-- When local results are empty, broaden geography for the SAME occupation: try a larger radius or explain the exact-source gap. Never switch occupations or interests merely to produce a result. Call get_related_occupations only if the user explicitly asks for alternatives or agrees to broaden occupationally.
+- When local results are empty, broaden geography for the SAME occupation: retry find_local_training with scope state, then nationwide, or explain the exact-source gap. Never switch occupations or interests merely to produce a result. Call get_related_occupations only if the user explicitly asks for alternatives or agrees to broaden occupationally.
 - For OJT/employer searches, describe the trade in plain words (for example automotive mechanic, car repair). Provider names are matched semantically by meaning, so sponsors with related names are found without exact word overlap. A semantic match is still only a lead to verify in the official VA tool.
 - Treat OJT, apprenticeships, and other paid training as one family: a user asking for OJT is also asking about apprenticeships, and vice versa. One find_va_facilities employer search covers both; never tell the user you have not checked apprenticeships after an OJT search, or run a second search just for them. VA lists apprenticeships inside its OJT program data and Jarvet labels each program as an apprenticeship or on-the-job training in the provider card.
 - When an employer search returns no name matches, the tool result includes nearest_ojt_providers: the closest approved OJT/apprenticeship sponsors regardless of name. Many sponsors have generic names (trust funds, JATCs, joint apprenticeship councils), so a name miss does not mean no OJT exists. Inspect each fallback provider's program_summaries for the user's trade before concluding nothing is available. Present relevant fallback providers as leads to verify, clearly saying their names did not mention the trade but their approved programs might include it. Only say an area has no OJT options after checking both the fallback list and the program summaries.

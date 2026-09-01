@@ -13,12 +13,12 @@
     },
     "8000": {
       "label": "Jarvet",
-      "onAutoForward": "openBrowser"
+      "onAutoForward": "openBrowserOnce"
     }
   },
   "containerEnv": {
     "LLM_BASE_URL": "https://openrouter.ai/api/v1",
-    "LLM_MODEL": "openai/gpt-4.1-mini"
+    "LLM_MODEL": "qwen/qwen3.7-flash",
   },
   "customizations": {
     "vscode": {
