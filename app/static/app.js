@@ -569,6 +569,26 @@ input.addEventListener("keydown", event => {
   }
 });
 
+const thinkingStatuses = [
+  "Finding the right path…",
+  "Checking O*NET occupation data…",
+  "Looking up approved providers…",
+  "Verifying program pages…",
+  "Comparing benefit details…",
+  "Reviewing official sources…",
+  "Still working — double-checking results…",
+];
+
+function startThinkingStatuses(element) {
+  let index = 0;
+  element.textContent = thinkingStatuses[0];
+  const timer = setInterval(() => {
+    index = Math.min(index + 1, thinkingStatuses.length - 1);
+    element.textContent = thinkingStatuses[index];
+  }, 3000);
+  return () => clearInterval(timer);
+}
+
 async function submitMessage(rawContent) {
   const content = rawContent.trim();
   if (!content) return;
@@ -580,6 +600,7 @@ async function submitMessage(rawContent) {
   input.style.height = "auto";
   send.disabled = true;
   const thinking = addMessage("assistant", "Finding the right path…", "thinking");
+  const stopThinkingStatuses = startThinkingStatuses(thinking);
   const requestRevision = directionRevision;
   const controller = new AbortController();
   activeChatController = controller;
@@ -598,9 +619,11 @@ async function submitMessage(rawContent) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || "Request failed");
     if (requestRevision !== directionRevision) {
+      stopThinkingStatuses();
       thinking.remove();
       return;
     }
+    stopThinkingStatuses();
     thinking.remove();
     messages.push({ role: "assistant", content: body.message });
     addMessage("assistant", body.message, "", body.resources || []);
@@ -611,6 +634,7 @@ async function submitMessage(rawContent) {
     persistDirection();
     renderSuggestions(body.suggestions);
   } catch (error) {
+    stopThinkingStatuses();
     if (error.name === "AbortError") {
       thinking.remove();
       return;

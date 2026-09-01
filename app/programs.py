@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from html.parser import HTMLParser
+from typing import Callable
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -11,6 +12,8 @@ STOP_WORDS = {
     "and", "at", "college", "general", "of", "program", "school", "technology",
     "technician", "the", "university",
 }
+
+Fetch = Callable[[str], object]
 
 
 class PageParser(HTMLParser):
@@ -75,16 +78,34 @@ def _same_site(candidate: str, school_url: str) -> bool:
     )
 
 
+async def _safe_fetch(
+    fetch: Callable[[httpx.AsyncClient, str], Awaitable[httpx.Response | None]],
+    client: httpx.AsyncClient, url: str,
+) -> httpx.Response | None:
+    try:
+        return await fetch(client, url)
+    except httpx.HTTPError:
+        return None
+
+
 async def discover_program_page(
     school: str, program: str, school_url: str,
+    fetch: Callable[[httpx.AsyncClient, str], Awaitable[httpx.Response | None]] | None = None,
 ) -> dict[str, str] | None:
     parsed_school = urlparse(school_url)
     if parsed_school.scheme not in {"http", "https"} or not parsed_school.hostname:
         return None
     headers = {"User-Agent": "Mozilla/5.0 (compatible; Jarvet/1.0; program-link-verifier)"}
+
+    async def default_fetch(client: httpx.AsyncClient, url: str) -> httpx.Response | None:
+        return await client.get(url)
+
+    fetch = fetch or default_fetch
     try:
         async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=headers) as client:
-            response = await client.get(school_url)
+            response = await fetch(client, school_url)
+            if response is None:
+                return None
             response.raise_for_status()
             root = PageParser()
             root.feed(response.text[:1_500_000])
@@ -111,15 +132,18 @@ async def discover_program_page(
             visited = {str(response.url).rstrip("/")}
             for depth in range(2):
                 next_frontier: list[tuple[int, str]] = []
-                for candidate_url in frontier:
-                    normalized_url = candidate_url.rstrip("/")
+                candidates = []
+                for url in frontier:
+                    normalized_url = url.rstrip("/")
                     if normalized_url in visited:
                         continue
                     visited.add(normalized_url)
-                    try:
-                        page_response = await client.get(candidate_url)
-                        page_response.raise_for_status()
-                    except httpx.HTTPError:
+                    candidates.append(url)
+                responses = await asyncio.gather(*(
+                    _safe_fetch(fetch, client, url) for url in candidates
+                ))
+                for candidate_url, page_response in zip(candidates, responses):
+                    if page_response is None:
                         continue
                     content_type = page_response.headers.get("content-type", "")
                     if "html" not in content_type:
@@ -185,9 +209,14 @@ async def discover_program_page(
     }
 
 
-async def discover_program_pages(programs: list[dict[str, str]]) -> list[dict[str, str]]:
+async def discover_program_pages(
+    programs: list[dict[str, str]],
+    fetch: Callable[[httpx.AsyncClient, str], Awaitable[httpx.Response | None]] | None = None,
+) -> list[dict[str, str]]:
     discoveries = await asyncio.gather(*(
-        discover_program_page(program["school"], program["program"], program.get("url", ""))
+        discover_program_page(
+            program["school"], program["program"], program.get("url", ""), fetch,
+        )
         for program in programs
     ))
     enriched = []

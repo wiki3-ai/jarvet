@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.agent import run_agent
-from app.cache import ResponseCache
+from app.cache import HttpCache, ResponseCache
 from app.onet import OnetGraph
 from app.va import VaComparison
 
@@ -28,6 +28,7 @@ response_cache = ResponseCache(
     max_entries=int(os.getenv("JARVET_CACHE_MAX_ENTRIES", "500")),
     ttl_seconds=int(os.getenv("JARVET_CACHE_TTL_SECONDS", "604800")),
 )
+http_cache = HttpCache(ROOT / ".cache" / "http-responses.sqlite")
 
 
 @asynccontextmanager
@@ -35,10 +36,12 @@ async def lifespan(_: FastAPI):
     index.load()
     va_index.load()
     response_cache.load()
+    http_cache.load()
     try:
         yield
     finally:
         response_cache.close()
+        http_cache.close()
 
 
 app = FastAPI(title="Jarvet", lifespan=lifespan)
@@ -119,16 +122,40 @@ class TrainingTableParser(HTMLParser):
             self.row["program"] = self.row.get("program", "") + data
 
 
+async def fetch_cached_page(
+    client: httpx.AsyncClient, url: str,
+) -> httpx.Response | None:
+    """Fetch a page through the shared HTTP cache (7-day TTL)."""
+    cached = http_cache.get(url, ttl_seconds=7 * 24 * 60 * 60)
+    if cached is not None:
+        body, content_type = cached
+        return httpx.Response(
+            200, content=body, headers={"content-type": content_type},
+            request=httpx.Request("GET", url),
+        )
+    response = await client.get(url)
+    response.raise_for_status()
+    http_cache.put(url, response.content, response.headers.get("content-type", ""))
+    return response
+
+
 async def fetch_local_training(code: str, zip_code: str) -> list[dict[str, str]] | None:
     if not zip_code:
         return []
     url = f"https://www.mynextmove.org/vets/profile/localtraining/{code}?zip={zip_code}"
+    cached = http_cache.get(url, ttl_seconds=7 * 24 * 60 * 60)
+    if cached is not None:
+        body, _ = cached
+        parser = TrainingTableParser()
+        parser.feed(body.decode("utf-8", errors="replace"))
+        return parser.programs[:8]
     try:
         async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
             response = await client.get(url)
             response.raise_for_status()
     except httpx.HTTPError:
         return None
+    http_cache.put(url, response.content, response.headers.get("content-type", ""))
     parser = TrainingTableParser()
     parser.feed(response.text)
     return parser.programs[:8]
@@ -323,6 +350,7 @@ async def chat(request: ChatRequest, response: Response):
             onet=index,
             va=va_index,
             fetch_training=fetch_local_training,
+            fetch_page=fetch_cached_page,
             official_resources=VA_RESOURCES,
             base_url=base_url,
             api_key=api_key,

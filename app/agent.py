@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Awaitable, Callable
 
@@ -10,6 +11,7 @@ from app.programs import discover_program_pages
 from app.va import VaComparison
 
 TrainingFetcher = Callable[[str, str], Awaitable[list[dict[str, str]] | None]]
+PageFetcher = Callable[[httpx.AsyncClient, str], Awaitable[httpx.Response | None]]
 
 TOOL_SCHEMAS = [
     {
@@ -135,11 +137,12 @@ class JarvetTools:
     def __init__(
         self, onet: OnetGraph, va: VaComparison, fetch_training: TrainingFetcher,
         official_resources: dict[str, dict[str, str]], selected: dict[str, str] | None,
-        provider_context: str,
+        provider_context: str, fetch_page: PageFetcher | None = None,
     ) -> None:
         self.onet = onet
         self.va = va
         self.fetch_training = fetch_training
+        self.fetch_page = fetch_page
         self.official_resources = official_resources
         self.selected = selected
         self.matches: list[dict[str, Any]] = []
@@ -229,7 +232,7 @@ class JarvetTools:
                 f"?zip={location['representative_zip']}"
             )
             if programs:
-                programs = await discover_program_pages(programs[:4])
+                programs = await discover_program_pages(programs[:4], fetch=self.fetch_page)
                 self._add_resource({
                     "label": f"Find {occupation['title']} training near {location['label']}",
                     "url": source_url,
@@ -315,8 +318,9 @@ class JarvetTools:
                 employer=provider_type == "employer", limit=limit, max_miles=radius,
             )
             self._add_resource(self.official_resources["compare"])
-            for facility in facilities[:4]:
-                await self._add_provider_resource(facility)
+            await asyncio.gather(*(
+                self._add_provider_resource(facility) for facility in facilities[:4]
+            ))
             return {
                 "location": location["label"],
                 "provider_type": provider_type,
@@ -356,6 +360,7 @@ async def run_agent(
     onet: OnetGraph, va: VaComparison,
     fetch_training: TrainingFetcher, official_resources: dict[str, dict[str, str]],
     base_url: str, api_key: str, model: str,
+    fetch_page: PageFetcher | None = None,
 ) -> dict[str, Any]:
     provider_context = " ".join([
         messages[-1]["content"] if messages else "",
@@ -363,7 +368,8 @@ async def run_agent(
         *(value for values in profile.values() for value in values),
     ])
     tools = JarvetTools(
-        onet, va, fetch_training, official_resources, selected_occupation, provider_context,
+        onet, va, fetch_training, official_resources, selected_occupation,
+        provider_context, fetch_page,
     )
     system = f"""You are Jarvet, an agentic education and career facilitator for veterans. Solve the user's actual problem by deciding which tools to call, inspecting their results, and adapting your next step. Do not follow a fixed questionnaire.
 

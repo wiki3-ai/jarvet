@@ -192,6 +192,28 @@ days and the 500 least-recently-used limit is configurable with
 be ignored. `/api/health` reports cache entries, hits, and misses, while each chat
 response includes `X-Jarvet-Cache: HIT` or `MISS`.
 
+## Performance
+
+Slow agent turns are dominated by sequential LLM tool-call rounds, so Jarvet
+caches and parallelizes everything else:
+
+- **Shared HTTP cache** — My Next Move training tables, crawled institution
+  pages, and other raw GET responses are stored in
+  `.cache/http-responses.sqlite` for seven days, so repeat questions about the
+  same occupation and area skip the web entirely.
+- **Parallel crawling** — program-page verification fetches a school's frontier
+  pages concurrently instead of one at a time, and provider detail lookups for
+  a shortlist run concurrently as well.
+- **VA API cache** — per-facility provider payloads are cached for seven days
+  and reused when VA is temporarily unavailable.
+- **Rotating status messages** — while the agent works, the frontend cycles a
+  status line every three seconds so users can tell the request is progressing
+  rather than stalled.
+
+The remaining latency is the model itself: each turn can take several
+tool-calling rounds against the configured LLM. Choosing a faster model in
+`LLM_MODEL` is the most effective way to shorten responses further.
+
 ## API endpoints
 
 | Endpoint | Method | Purpose |
